@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { Dodo, emptyData, LOST_LINE, split } from '../src/sync.js';
+import { Dodo, emptyData, LOST_TITLE, split } from '../src/sync.js';
 import { Server, login, rig, sleep, writes, fetchHttp, FakeVault, state, type Rig } from './helpers.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -191,7 +191,8 @@ test('lost access: syncing stops, a line is put at the top, the note moves to Bo
   assert.ok(r.dodo.data.lists[r.list].lost);
   assert.ok(!r.vault.files.has(path));
   assert.equal(r.vault.files.get(`dodo/Borttagna/${stem}.md`), 'en gammal fil');
-  assert.ok(r.vault.file(r.list).startsWith(`---\ndodo: ${srv.url}/l/${r.list}\n---\n${LOST_LINE}\n\n## Inköp`));
+  assert.ok(r.vault.file(r.list).startsWith(`---\ndodo: ${srv.url}/l/${r.list}\n---\n${LOST_TITLE}\n> »`), r.vault.file(r.list));
+  assert.match(r.vault.file(r.list), /längre \(\d{4}-\d\d-\d\d\)\. Anteckningen hålls inte i takt längre, men texten finns kvar här\.\n\n## Inköp/);
   assert.ok(r.vault.files.has(`dodo/Borttagna/${stem} 2.md`));
   r.log.length = 0;
   await r.dodo.tick();

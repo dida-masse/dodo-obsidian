@@ -57,7 +57,9 @@ export default class DodoPlugin extends Plugin implements Host {
     this.data = Object.assign(emptyData(), await this.loadData());
     this.dodo = new Dodo(this.data, { http, host: this, save: () => this.saveData(this.data), openSettings: () => this.openSettings() });
     this.dodo.onStatus = () => this.paint();
-    this.addSettingTab(new Settings(this));
+    const tab = new Settings(this);
+    this.dodo.onLists = () => { if (tab.containerEl.isConnected) tab.display(); }; // an open settings tab is not left showing old toggles
+    this.addSettingTab(tab);
     this.addCommand({ id: 'add-list', name: 'Lägg till lista', callback: () => this.addList() });
     if (Platform.isDesktop) { this.bar = this.addStatusBarItem(); this.bar.addClass('mod-clickable'); this.bar.onClickEvent(() => new Notice(this.dodo.lastError || 'dodo: allt är skickat.')); this.paint(); }
 

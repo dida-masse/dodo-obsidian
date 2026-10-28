@@ -25,7 +25,9 @@ export interface ListData { name: string; rev: number; text: string; snap: Snap;
 export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; lists: Record<string, ListData> }
 export const emptyData = (): Data => ({ url: '', session: '', name: '', folder: 'dodo', hideDone: false, autoAdd: true, lists: {} });
 
-export const LOST_LINE = '> dodo: du är inte med i den här listan längre, så anteckningen hålls inte i takt.';
+// a callout at the top of a note whose list is gone (the server says 404 both when it was deleted and when you were taken out of it)
+export const LOST_TITLE = '> [!warning] Listan finns inte längre i dodo';
+export const lostNote = (name: string, day: string) => `${LOST_TITLE}\n> »${name}« är borttagen i dodo, eller så är du inte med i den längre (${day}). Anteckningen hålls inte i takt längre, men texten finns kvar här.`;
 export const ASIDE = 'Borttagna';
 export const SEND_MS = 1000; // quiet after typing before it is sent
 // the first free `dir/stem.md`, `dir/stem 2.md` …; n > 1 means the first was taken
@@ -66,6 +68,7 @@ export class Dodo {
   lastError = '';
   authLost = false;
   onStatus: () => void = () => {};
+  onLists: () => void = () => {}; // a list was turned on or lost: the settings tab shows it
   private md: Md;
   private users: any[] = [];
   private busy = 0;
@@ -156,7 +159,7 @@ export class Dodo {
   // a message from the event stream: a list changed, or lists were added or taken away
   event(name: string, d: any) {
     if (name === 'rev' && d?.list && this.data.lists[d.list]) void this.cycle(d.list, false);
-    else if (name === 'lists') void this.addNew(true);
+    else if (name === 'lists') { void this.addNew(true); for (const id of Object.keys(this.data.lists)) void this.cycle(id, false); } // a deleted list is noticed at once
   }
   // lists the server has that the vault has never seen are turned on; a list switched off stays off
   private async addNew(force: boolean) {
@@ -166,7 +169,7 @@ export class Dodo {
       for (const l of await this.lists()) {
         if (this.data.lists[l.id] || this.adding.has(l.id)) continue;
         this.adding.add(l.id);
-        try { await this.enable(l.id); } finally { this.adding.delete(l.id); }
+        try { await this.enable(l.id); this.onLists(); } finally { this.adding.delete(l.id); }
       }
       this.errs.delete('lists');
     } catch (e: any) {
@@ -305,10 +308,11 @@ export class Dodo {
     } else if (e.lost && ld && note) {
       ld.lost = true; this.errs.delete(id);
       const file = await note.read().catch(() => '');
-      if (file && !file.includes(LOST_LINE)) { const { head } = split(file); await note.replace(file, head + LOST_LINE + '\n\n' + file.slice(head.length)); }
+      if (file && !file.includes(LOST_TITLE)) { const { head } = split(file); await note.replace(file, head + lostNote(ld.name, new Date().toISOString().slice(0, 10)) + '\n\n' + file.slice(head.length)); }
       const dir = this.data.folder.replace(/^\/+|\/+$/g, '');
       await this.d.host.move(id, `${dir ? dir + '/' : ''}${ASIDE}`).catch(() => {});
-      this.d.host.notice(`dodo: du är inte med i »${ld.name}« längre. Anteckningen ligger nu i ${ASIDE} och hålls inte i takt.`);
+      this.d.host.notice(`dodo: »${ld.name}« finns inte längre i dodo. Anteckningen ligger nu i ${ASIDE}, med en rad överst om det.`);
+      this.onLists();
       await this.d.save();
     } else this.errs.set(id, e.message || String(e));
   }
