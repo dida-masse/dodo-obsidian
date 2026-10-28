@@ -12,16 +12,16 @@ Tills pluginet finns i Obsidians katalog: bygg det (`npm install && npm run buil
 
 1. I dodo: ⋯ → *Logga in på annan enhet*, kopiera länken (den gäller en gång i 10 minuter).
 2. I Obsidian: *Inställningar → dodo*, klistra in länken. Det står sedan *Inloggad som … på …*.
-3. Bocka för de listor du vill ha. Varje lista blir `dodo/<listans namn>.md` (mappen går att ändra). Finns filen redan skrivs den aldrig över, utan den nya får ett annat namn. Kommandot *dodo: Lägg till lista* gör samma sak.
+3. Bocka för de listor du vill ha. Varje lista blir `dodo/<listans namn>.md` (mappen går att ändra). Finns filen redan skrivs den aldrig över, utan den nya får ett annat namn. Kommandot *dodo: Lägg till lista* gör samma sak. Med inställningen *Lägg till nya listor automatiskt* (på som standard) blir nya listor i dodo anteckningar av sig själva, högst en kontroll var 30:e sekund; en lista du har stängt av läggs inte till igen.
 
 Sessionen sparas bara i pluginets egna data (`data.json`), aldrig i anteckningarna, och syns i dodo under *Användare (admin)*. *Logga ut* i inställningarna stänger den.
 
 ## Så fungerar det
 
-- Ändringar i dodo hämtas var fjärde sekund och när Obsidian startar eller får fokus. Medan du skriver väntar uppdateringen tills du har slutat skriva en stund; markören och scrollen står kvar.
-- Det du skriver skickas cirka 1,5 sekunder efter att du slutat, och när du lämnar anteckningen. Bara det som har ändrats skickas, och en ändrad rad behåller sin uppgift. Tar du bort mer än hälften av uppgifterna på en gång frågar pluginet först.
+- På datorn säger servern till direkt när något ändras (en ström som hålls öppen), och pluginet frågar bara var 30:e sekund som säkerhet. På mobilen, eller medan strömmen ligger nere, frågar det varannan sekund. Allt hämtas också när Obsidian startar eller får fokus. Medan du skriver väntar uppdateringen tills du har slutat skriva en stund; markören och scrollen står kvar.
+- Det du skriver skickas cirka 1 sekund efter att du slutat, och när du lämnar anteckningen. Bara det som har ändrats skickas, och en ändrad rad behåller sin uppgift. Tar du bort mer än hälften av uppgifterna på en gång frågar pluginet först.
 - Har både du och någon annan ändrat samma uppgift står dodos version kvar, och din text läggs som en kommentar på uppgiften, med en notis.
-- Offline sparas allt i anteckningen och skickas när nätet är tillbaka. Är du utloggad får du en notis med en knapp för att logga in igen. Försvinner du ur en lista får anteckningen en rad överst om det och hålls inte längre i takt; filen tas aldrig bort.
+- Offline sparas allt i anteckningen och skickas när nätet är tillbaka. Är du utloggad får du en notis med en knapp för att logga in igen. Försvinner du ur en lista får anteckningen en rad överst om det och hålls inte längre i takt; filen tas aldrig bort utan flyttas till `dodo/Borttagna/` (länkar följer med).
 - Statusraden (dator) visar *dodo ✓*, *dodo …* eller *dodo !*; ett klick visar vad som gick fel.
 - Inställningen *Dölj klara uppgifter* tar bort dem ur anteckningen utan att ta bort dem i dodo.
 
