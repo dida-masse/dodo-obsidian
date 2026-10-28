@@ -22,8 +22,8 @@ export interface Host {
 }
 export interface Snap { me: string; users: any[]; headings: any[]; todos: any[]; comments?: any[] }
 export interface ListData { name: string; rev: number; text: string; snap: Snap; hide: boolean; off?: boolean; lost?: boolean }
-export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; seen: Record<string, string>; lists: Record<string, ListData> }
-export const emptyData = (): Data => ({ url: '', session: '', name: '', folder: 'dodo', hideDone: false, autoAdd: true, seen: {}, lists: {} });
+export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; seen: Record<string, string>; since: string; lists: Record<string, ListData> }
+export const emptyData = (): Data => ({ url: '', session: '', name: '', folder: 'dodo', hideDone: false, autoAdd: true, seen: {}, since: '', lists: {} });
 
 // a callout at the top of a note whose list is gone (the server says 404 both when it was deleted and when you were taken out of it)
 export const LOST_TITLE = '> [!warning] Listan finns inte längre i dodo';
@@ -99,6 +99,7 @@ export class Dodo {
 
   constructor(public data: Data, private d: { http: Http; host: Host; save: () => unknown; openSettings?: () => void }) {
     this.md = loadMd(this.users, uid, 'sv');
+    if (!data.since) data.since = new Date().toISOString(); // saved with the next save
   }
 
   // ---- network ----
@@ -328,7 +329,6 @@ export class Dodo {
   // ---- comments ----
   onSnap: (listId: string) => void = () => {};
   private told: string[] = [];
-  readonly started = new Date().toISOString(); // comments before this count as old, like the web's "previous visit"
   name(S: Snap, user: string) { return user?.[0] === '@' ? user.slice(1) : S.users.find(u => u.id === user)?.name ?? 'okänd'; }
   // someone else's comment that was not in the last snapshot: one notice for a whole batch
   private news(old: Snap, S: Snap) {
@@ -345,7 +345,8 @@ export class Dodo {
     this.d.host.notice('dodo: ' + first + (more.length ? ` (och ${more.length} till)` : ''));
   }
   private fresh(S: Snap, todo: string) {
-    return (S.comments || []).some(c => c.todo === todo && c.user !== S.me && c.at > this.started && c.at > (this.data.seen[todo] || ''));
+    return (S.comments || []).some(c => c.todo === todo && c.user !== S.me && c.at > this.data.since && // older than the plugin itself counts as seen; unseen ones stay new across restarts
+       c.at > (this.data.seen[todo] || ''));
   }
   private plan(id: string, file: string) {
     const ld = this.data.lists[id];

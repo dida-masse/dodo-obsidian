@@ -240,7 +240,7 @@ test('a comment changes only the snapshot, never the note; one notice for a batc
   assert.equal(th.threads[0].replies[0].text, 'Ja');
   const line = r.vault.file(r.list).split('\n').findIndex(l => l.includes('mjölk'));
   const [m] = r.dodo.commentLines(r.list, r.vault.file(r.list));
-  assert.deepEqual(m, { line, id: t1, n: 2, fresh: true }, 'someone else, after this session started');
+  assert.deepEqual(m, { line, id: t1, n: 2, fresh: true }, 'someone else, after the plugin was set up');
   r.dodo.markSeen(r.list, t1);
   assert.equal(r.dodo.commentLines(r.list, r.vault.file(r.list))[0].fresh, false);
   assert.equal(r.dodo.name(th.S, th.threads[0].root.user), 'Anna');
