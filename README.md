@@ -6,7 +6,7 @@ Anteckningen är samma text som Markdown-läget i dodo: bara `- [ ]` och `- [x]`
 
 ## Installera
 
-Tills pluginet finns i Obsidians katalog: bygg det (`npm install && npm run build`) eller hämta `main.js` och `manifest.json`, och lägg dem i `<valvet>/.obsidian/plugins/dodo/`. Starta om Obsidian och slå på *dodo* under *Community plugins*.
+Tills pluginet finns i Obsidians katalog: bygg det (`npm install && npm run build`) eller hämta `main.js`, `manifest.json` och `styles.css`, och lägg dem (och `styles.css`) i `<valvet>/.obsidian/plugins/dodo/`. Starta om Obsidian och slå på *dodo* under *Community plugins*.
 
 ## Logga in och välj listor
 
@@ -27,7 +27,11 @@ Sessionen sparas bara i pluginets egna data (`data.json`), aldrig i anteckningar
 
 ## Det som inte finns i anteckningen
 
-Kommentarer, vem som bockade av och när, och historiken. De finns kvar i dodo och påverkas inte av att anteckningen skrivs om.
+Kommentarer skrivs aldrig in i anteckningen, och inte heller vem som bockade av och när eller historiken. De finns kvar i dodo och påverkas inte av att anteckningen skrivs om.
+
+## Kommentarer
+
+Kommandot *dodo: Visa kommentarer* (eller ikonen i vänsterkanten) öppnar en sidopanel med kommentarerna på uppgiften där markören står: författare, tid och text (markdown), svar indragna under tråden, lösta trådar ihopvikta. Längst ner skriver du en ny kommentar (Ctrl/Cmd+Enter skickar), och *Svara* finns på varje kommentar. Rader med kommentarer får en liten *💬 n* sist på raden (bara en markering i editorn, inte text i filen); den är färgad när någon annan har skrivit något du inte har sett, och ett klick öppnar panelen. När någon annan kommenterar får du en notis. En rad du precis har skrivit och som inte är skickad än har inga kommentarer.
 
 ## Nästa steg
 
