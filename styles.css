@@ -1,0 +1,16 @@
+.dodo-mark { margin-left: 0.6em; font-size: 0.8em; opacity: 0.55; cursor: pointer; white-space: nowrap; }
+.dodo-mark:hover { opacity: 1; }
+.dodo-mark-new { opacity: 1; color: var(--text-accent); font-weight: 600; }
+.dodo-panel { padding: 8px 12px; }
+.dodo-hint { color: var(--text-muted); font-size: var(--font-ui-small); }
+.dodo-title { margin: 0 0 8px; }
+.dodo-thread { border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; }
+.dodo-resolved { color: var(--text-muted); cursor: pointer; font-size: var(--font-ui-small); }
+.dodo-chead { display: flex; gap: 8px; align-items: baseline; }
+.dodo-when { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.dodo-body p { margin: 2px 0; }
+.dodo-acts { display: flex; gap: 6px; }
+.dodo-acts button { background: none; box-shadow: none; padding: 0 4px; height: auto; color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.dodo-form textarea { width: 100%; resize: vertical; }
+.dodo-row { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+.dodo-new { position: sticky; bottom: 0; background: var(--background-primary); padding-top: 6px; }
