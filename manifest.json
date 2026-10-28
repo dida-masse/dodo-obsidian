@@ -1,0 +1,9 @@
+{
+  "id": "dodo",
+  "name": "dodo",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Håller dodo-listor i takt med anteckningar i valvet, åt båda hållen.",
+  "author": "Mattias Schertell",
+  "isDesktopOnly": false
+}
