@@ -15,16 +15,25 @@ export interface Note {
 export interface Host {
   note(listId: string): Note | null;
   exists(path: string): boolean;
+  move(listId: string, dir: string): Promise<void>; // the note goes into `dir` under a free name; links follow
   create(path: string, text: string): Promise<Note>;
   notice(text: string, action?: { label: string; run: () => void }): void;
   confirm(text: string): Promise<boolean>;
 }
 export interface Snap { me: string; users: any[]; headings: any[]; todos: any[] }
 export interface ListData { name: string; rev: number; text: string; snap: Snap; hide: boolean; off?: boolean; lost?: boolean }
-export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; lists: Record<string, ListData> }
-export const emptyData = (): Data => ({ url: '', session: '', name: '', folder: 'dodo', hideDone: false, lists: {} });
+export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; lists: Record<string, ListData> }
+export const emptyData = (): Data => ({ url: '', session: '', name: '', folder: 'dodo', hideDone: false, autoAdd: true, lists: {} });
 
 export const LOST_LINE = '> dodo: du är inte med i den här listan längre, så anteckningen hålls inte i takt.';
+export const ASIDE = 'Borttagna';
+export const SEND_MS = 1000; // quiet after typing before it is sent
+// the first free `dir/stem.md`, `dir/stem 2.md` …; n > 1 means the first was taken
+export function freeName(dir: string, stem: string, exists: (p: string) => boolean) {
+  let n = 1, path = '';
+  do path = `${dir ? dir + '/' : ''}${stem}${n > 1 ? ' ' + n : ''}.md`; while (exists(path) && ++n);
+  return { path, n };
+}
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const FM = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/;
 // a file -> its frontmatter and the document text (no trailing newline, \n only)
@@ -128,8 +137,7 @@ export class Dodo {
     if (old && h.note(id)) { old.off = false; old.lost = false; await this.d.save(); return this.flush(id); }
     const S = (await this.state(id))!, hide = this.data.hideDone, text = this.render(S, hide);
     const stem = fileName(S.list.name), dir = this.data.folder.replace(/^\/+|\/+$/g, '');
-    let n = 1, path = '';
-    do path = `${dir ? dir + '/' : ''}${stem}${n > 1 ? ' ' + n : ''}.md`; while (h.exists(path) && ++n);
+    const { path, n } = freeName(dir, stem, h.exists.bind(h));
     await h.create(path, toFile(`---\ndodo: ${this.data.url}/l/${id}\n---\n`, text));
     if (n > 1) h.notice(`Det fanns redan en fil med det namnet, så anteckningen heter ${path.split('/').pop()}.`);
     this.data.lists[id] = { name: S.list.name, rev: S.rev, text, snap: this.snap(S), hide };
@@ -139,7 +147,33 @@ export class Dodo {
 
   // ---- when to sync ----
   touched(id: string) { this.edited.set(id, Date.now()); }
-  tick() { return Promise.all(Object.keys(this.data.lists).map(id => this.cycle(id, false))).then(() => {}); }
+  listCheckEvery = 30000;
+  private listCheck = 0;
+  private adding = new Set<string>();
+  async tick() {
+    await Promise.all([this.addNew(false), ...Object.keys(this.data.lists).map(id => this.cycle(id, false))]);
+  }
+  // a message from the event stream: a list changed, or lists were added or taken away
+  event(name: string, d: any) {
+    if (name === 'rev' && d?.list && this.data.lists[d.list]) void this.cycle(d.list, false);
+    else if (name === 'lists') void this.addNew(true);
+  }
+  // lists the server has that the vault has never seen are turned on; a list switched off stays off
+  private async addNew(force: boolean) {
+    if (!this.data.autoAdd || !this.data.session || this.authLost || (!force && Date.now() - this.listCheck < this.listCheckEvery)) return;
+    this.listCheck = Date.now();
+    try {
+      for (const l of await this.lists()) {
+        if (this.data.lists[l.id] || this.adding.has(l.id)) continue;
+        this.adding.add(l.id);
+        try { await this.enable(l.id); } finally { this.adding.delete(l.id); }
+      }
+      this.errs.delete('lists');
+    } catch (e: any) {
+      if (e.status === 401) await this.fail('lists', null, null, e); else if (!e.offline) this.errs.set('lists', e.message || String(e));
+      this.update();
+    }
+  }
   flush(id: string) { return this.cycle(id, true); }
 
   private cycle(id: string, now: boolean): Promise<void> {
@@ -154,7 +188,7 @@ export class Dodo {
     try {
       const { text } = split(await note.read());
       if (text === ld.text) await this.pull(id, ld, note);
-      else if (now || Date.now() - (this.edited.get(id) || 0) >= 1500) await this.push(id, ld, note); // still typing: the debounce sends it
+      else if (now || Date.now() - (this.edited.get(id) || 0) >= SEND_MS) await this.push(id, ld, note); // still typing: the debounce sends it
       this.errs.delete(id);
     } catch (e: any) { await this.fail(id, ld, note, e); }
     finally { this.busy--; this.update(); }
@@ -263,16 +297,18 @@ export class Dodo {
   }
 
   // ---- errors and status ----
-  private async fail(id: string, ld: ListData, note: Note, e: Fail) {
+  private async fail(id: string, ld: ListData | null, note: Note | null, e: Fail) {
     if (e.status === 401) {
       this.authLost = true;
       this.errs.set(id, 'Sessionen har stängts av. Logga in igen.');
       this.d.host.notice('dodo: du är utloggad. Det du skriver sparas i anteckningen och skickas efter inloggningen.', this.d.openSettings && { label: 'Logga in igen', run: this.d.openSettings });
-    } else if (e.lost) {
+    } else if (e.lost && ld && note) {
       ld.lost = true; this.errs.delete(id);
       const file = await note.read().catch(() => '');
       if (file && !file.includes(LOST_LINE)) { const { head } = split(file); await note.replace(file, head + LOST_LINE + '\n\n' + file.slice(head.length)); }
-      this.d.host.notice(`dodo: du är inte med i »${ld.name}« längre, så anteckningen hålls inte i takt.`);
+      const dir = this.data.folder.replace(/^\/+|\/+$/g, '');
+      await this.d.host.move(id, `${dir ? dir + '/' : ''}${ASIDE}`).catch(() => {});
+      this.d.host.notice(`dodo: du är inte med i »${ld.name}« längre. Anteckningen ligger nu i ${ASIDE} och hålls inte i takt.`);
       await this.d.save();
     } else this.errs.set(id, e.message || String(e));
   }

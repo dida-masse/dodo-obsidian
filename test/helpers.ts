@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Dodo, emptyData, listIdOf, type Data, type Host, type Http, type Note } from '../src/sync.js';
+import { Dodo, emptyData, freeName, listIdOf, type Data, type Host, type Http, type Note } from '../src/sync.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../dodo/server.js');
@@ -59,6 +59,11 @@ export class FakeVault implements Host {
   }
   file(id: string) { return this.files.get(this.path(id)!)!; }
   edit(id: string, f: (t: string) => string) { this.files.set(this.path(id)!, f(this.file(id))); }
+  async move(id: string, dir: string) {
+    const from = this.path(id)!, stem = from.split('/').pop()!.replace(/\.md$/, '');
+    const to = freeName(dir, stem, p => this.exists(p)).path;
+    this.files.set(to, this.files.get(from)!); this.files.delete(from);
+  }
   exists(p: string) { return this.files.has(p); }
   async create(p: string, text: string) { this.files.set(p, text); return this.note(listIdOf(text.match(/dodo:\s*(\S+)/)![1])!)!; }
   notice(text: string, action?: any) { this.notices.push({ text, action }); }
@@ -75,7 +80,7 @@ export async function rig(srv: Server, name: string, sessions: { boss: string; a
   const list = srv.cli('list', 'create', name, '--owner', 'boss@example.com').id;
   srv.cli('member', 'add', list, 'anna@example.com');
   const log: Log = [], vault = new FakeVault(), data = emptyData();
-  Object.assign(data, { url: srv.url, session: sessions.boss, name: 'Boss' });
+  Object.assign(data, { url: srv.url, session: sessions.boss, name: 'Boss', autoAdd: false });
   const dodo = new Dodo(data, { http: fetchHttp(log), host: vault, save: () => {}, openSettings: () => {} });
   const anna = async (m: string, p: string, b?: any) => {
     const r = await fetch(`${srv.url}/api/l/${list}${p}`, { method: m, headers: { authorization: 'Bearer ' + sessions.anna, ...(m !== 'GET' && { 'content-type': 'application/json' }) }, body: b === undefined ? undefined : JSON.stringify(b) });

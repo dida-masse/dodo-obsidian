@@ -1,8 +1,9 @@
 // The Obsidian side: vault, editor, settings and timers around the sync core (sync.ts).
 import { FuzzySuggestModal, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, normalizePath, requestUrl, type Editor, type MarkdownFileInfo } from 'obsidian';
-import { Dodo, emptyData, listIdOf, minimalChange, type Data, type Host, type Http, type Note } from './sync.js';
+import { nodeStream, type Stream } from './events.js';
+import { Dodo, emptyData, freeName, listIdOf, minimalChange, SEND_MS, type Data, type Host, type Http, type Note } from './sync.js';
 
-const POLL_MS = 4000, SEND_MS = 1500, QUIET_MS = 2000;
+const POLL_MS = 2000, SAFETY_MS = 30000, QUIET_MS = 2000; // polling every 2 s, or every 30 s while the event stream is up
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 // requestUrl works on mobile and is not stopped by CORS; throw: false gives the status instead of an exception
@@ -48,6 +49,9 @@ export default class DodoPlugin extends Plugin implements Host {
   private bar?: HTMLElement;
   private ticking = false;
   private last: TFile | null = null;
+  private stream?: { close(): void };
+  private up = false;
+  private poll?: number;
 
   async onload() {
     this.data = Object.assign(emptyData(), await this.loadData());
@@ -65,12 +69,24 @@ export default class DodoPlugin extends Plugin implements Host {
       if (prev && prev !== now) { const id = this.idOf(prev); if (id) void this.dodo.flush(id); }
       this.last = now;
     }));
-    this.registerInterval(window.setInterval(() => void this.tick(), POLL_MS));
+    const loop = () => { this.poll = window.setTimeout(() => { void this.tick().finally(loop); }, this.up ? SAFETY_MS : POLL_MS); };
+    loop();
     this.registerDomEvent(window, 'focus', () => void this.tick());
     this.registerDomEvent(document, 'visibilitychange', () => { if (!document.hidden) void this.tick(); });
-    this.app.workspace.onLayoutReady(() => { this.last = this.app.workspace.getActiveFile(); void this.tick(); });
+    this.app.workspace.onLayoutReady(() => { this.last = this.app.workspace.getActiveFile(); this.openStream(); void this.tick(); });
   }
-  onunload() { for (const t of this.timers.values()) window.clearTimeout(t); }
+  onunload() { window.clearTimeout(this.poll); this.stream?.close(); for (const t of this.timers.values()) window.clearTimeout(t); }
+
+  // desktop only: the server says at once when something changes (requestUrl cannot stream, so Node's http is used)
+  openStream() {
+    this.stream?.close(); this.stream = undefined; this.up = false;
+    const load = (window as unknown as { require?: (m: string) => unknown }).require;
+    if (!Platform.isDesktopApp || !load || !this.data.session) return;
+    const open: Stream = nodeStream(load);
+    this.stream = open({ url: this.data.url, session: this.data.session,
+      onState: up => { this.up = up; if (up) void this.tick(); }, // after a drop or a wake-up: catch up at once
+      onEvent: (name, d) => this.dodo.event(name, d) });
+  }
 
   private async tick() {
     if (this.ticking || !this.data.session) return;
@@ -144,6 +160,12 @@ export default class DodoPlugin extends Plugin implements Host {
       },
     };
   }
+  async move(id: string, dir: string) {
+    const file = this.fileFor(id);
+    if (!file) return;
+    if (!this.app.vault.getAbstractFileByPath(dir)) await this.app.vault.createFolder(dir).catch(() => {});
+    await this.app.fileManager.renameFile(file, normalizePath(freeName(dir, file.basename, p => this.exists(p)).path)); // links follow
+  }
   exists(path: string) { const l = path.toLowerCase(); return this.app.vault.getAllLoadedFiles().some(f => f.path.toLowerCase() === l); }
   async create(path: string, text: string) {
     path = normalizePath(path);
@@ -172,14 +194,16 @@ class Settings extends PluginSettingTab {
         .setDesc('Öppna dodo i webbläsaren, välj ⋯ → Logga in på annan enhet och klistra in länken här. Den gäller en gång i 10 minuter.')
         .addText(t => t.setPlaceholder('https://…/in/…').onChange(v => link = v))
         .addButton(b => b.setButtonText('Logga in').setCta().onClick(async () => {
-          try { await dodo.login(link); await this.p.saveData(data); void this.p.dodo.tick(); this.display(); } catch (e) { new Notice((e as Error).message, 10000); }
+          try { await dodo.login(link); await this.p.saveData(data); this.p.openStream(); void this.p.dodo.tick(); this.display(); } catch (e) { new Notice((e as Error).message, 10000); }
         }));
       return;
     }
     new Setting(el).setName(`Inloggad som ${data.name} på ${new URL(data.url).host}`)
-      .addButton(b => b.setButtonText('Logga ut').onClick(async () => { await dodo.logout(); this.display(); }));
+      .addButton(b => b.setButtonText('Logga ut').onClick(async () => { await dodo.logout(); this.p.openStream(); this.display(); }));
     new Setting(el).setName('Mapp').setDesc('Här ligger anteckningarna, en för varje lista.')
       .addText(t => t.setValue(data.folder).onChange(async v => { data.folder = v.trim(); await this.p.saveData(data); }));
+    new Setting(el).setName('Lägg till nya listor automatiskt').setDesc('Nya listor i dodo blir anteckningar av sig själva. En lista du har stängt av läggs inte till igen.')
+      .addToggle(t => t.setValue(data.autoAdd).onChange(async v => { data.autoAdd = v; await this.p.saveData(data); }));
     new Setting(el).setName('Dölj klara uppgifter').setDesc('De finns kvar i dodo, bara inte i anteckningen.')
       .addToggle(t => t.setValue(data.hideDone).onChange(async v => { data.hideDone = v; await this.p.saveData(data); void this.p.dodo.tick(); }));
     new Setting(el).setName('Listor').setHeading();

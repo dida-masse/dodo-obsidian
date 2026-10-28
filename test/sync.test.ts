@@ -181,14 +181,42 @@ test('logged out: a notice with a button, the text stays and is sent after loggi
   assert.ok((await state(r)).todos.some((t: any) => t.text === 'skrivet utloggad'));
 });
 
-test('lost access: syncing stops, a line is put at the top, the file stays', async () => {
+test('lost access: syncing stops, a line is put at the top, the note moves to Borttagna and is never deleted', async () => {
   const r = await mk(); await seed(r); await r.dodo.enable(r.list);
+  const path = [...r.vault.files.keys()][0], stem = path.split('/').pop()!.replace(/\.md$/, '');
+  r.vault.files.set(`dodo/Borttagna/${stem}.md`, 'en gammal fil'); // the name is taken there
   srv.cli('member', 'add', r.list, 'anna@example.com', '--role', 'admin'); // so the list keeps an admin
   srv.cli('member', 'remove', r.list, 'boss@example.com');
   await r.dodo.tick();
   assert.ok(r.dodo.data.lists[r.list].lost);
+  assert.ok(!r.vault.files.has(path));
+  assert.equal(r.vault.files.get(`dodo/Borttagna/${stem}.md`), 'en gammal fil');
   assert.ok(r.vault.file(r.list).startsWith(`---\ndodo: ${srv.url}/l/${r.list}\n---\n${LOST_LINE}\n\n## Inköp`));
+  assert.ok(r.vault.files.has(`dodo/Borttagna/${stem} 2.md`));
   r.log.length = 0;
   await r.dodo.tick();
   assert.deepEqual(r.log, []);
+});
+
+const count = (r: Rig, id: string) => [...r.vault.files.values()].filter(t => t.includes(`/l/${id}\n`)).length;
+test('new lists are added by themselves; a list switched off stays off; the setting can be off', async () => {
+  const r = await mk('Auto'); r.dodo.listCheckEvery = 0;
+  const a = srv.cli('list', 'create', 'Ny ' + ++n, '--owner', 'boss@example.com').id;
+  await r.dodo.tick();
+  assert.equal(count(r, a), 0, 'setting off: nothing added');
+  r.data.autoAdd = true;
+  await r.dodo.tick();
+  assert.equal(count(r, a), 1);
+  assert.ok(r.vault.note(a));
+  await r.dodo.disable(a);
+  await r.dodo.tick(); await r.dodo.tick();
+  assert.equal(count(r, a), 1, 'not added twice');
+  assert.equal(r.data.lists[a].off, true);
+  const b = srv.cli('list', 'create', 'Ny ' + ++n, '--owner', 'boss@example.com').id;
+  r.data.autoAdd = false;
+  await r.dodo.tick();
+  assert.equal(count(r, b), 0);
+  r.dodo.event('lists', {}); // the stream says so, but the setting is off
+  await sleep(300);
+  assert.equal(count(r, b), 0);
 });
