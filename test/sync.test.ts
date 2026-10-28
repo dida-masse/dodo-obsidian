@@ -221,3 +221,76 @@ test('new lists are added by themselves; a list switched off stays off; the sett
   await sleep(300);
   assert.equal(count(r, b), 0);
 });
+
+test('a comment changes only the snapshot, never the note; one notice for a batch; seen marks them', async () => {
+  const r = await mk(); await seed(r); await r.dodo.enable(r.list);
+  const before = r.vault.file(r.list), t1 = r.id('tttt1'), rev = r.data.lists[r.list].rev;
+  await r.anna('POST', `/todos/${t1}/comments`, { text: 'Ekologisk?' });
+  const root = (await state(r)).comments[0];
+  await r.anna('POST', `/todos/${t1}/comments`, { text: 'Ja', parent: root.id });
+  r.log.length = 0;
+  await r.dodo.tick();
+  assert.equal(r.vault.file(r.list), before);
+  assert.deepEqual(writes(r.log), []);
+  assert.ok(r.data.lists[r.list].rev > rev);
+  assert.equal(r.vault.notices.filter(n => /kommenterade/.test(n.text)).length, 1);
+  assert.equal(r.vault.notices.at(-1)!.text, 'dodo: Anna kommenterade »mjölk« (och 1 till)');
+  const th = r.dodo.threads(r.list, t1)!;
+  assert.equal(th.threads.length, 1);
+  assert.equal(th.threads[0].replies[0].text, 'Ja');
+  const line = r.vault.file(r.list).split('\n').findIndex(l => l.includes('mjölk'));
+  const [m] = r.dodo.commentLines(r.list, r.vault.file(r.list));
+  assert.deepEqual(m, { line, id: t1, n: 2, fresh: true }, 'someone else, after this session started');
+  r.dodo.markSeen(r.list, t1);
+  assert.equal(r.dodo.commentLines(r.list, r.vault.file(r.list))[0].fresh, false);
+  assert.equal(r.dodo.name(th.S, th.threads[0].root.user), 'Anna');
+});
+
+test('comments from before an old snapshot are fetched once; posting and resolving go to the server', async () => {
+  const r = await mk(); await seed(r); await r.dodo.enable(r.list);
+  const t2 = r.id('tttt2');
+  delete r.data.lists[r.list].snap.comments; // a 0.2 snapshot
+  await r.anna('POST', `/todos/${t2}/comments`, { text: 'gammal' });
+  await r.dodo.tick();
+  assert.equal(r.dodo.threads(r.list, t2)!.threads.length, 1);
+  await r.dodo.comment(r.list, t2, 'från Obsidian');
+  const root = r.dodo.threads(r.list, t2)!.threads[0].root;
+  await r.dodo.comment(r.list, t2, 'svar', root.id);
+  await r.dodo.resolve(r.list, root.id, true);
+  const s = await state(r);
+  assert.equal(s.comments.length, 3);
+  assert.ok(s.comments.find((c: any) => c.id === root.id).resolved);
+  assert.equal(r.dodo.threads(r.list, t2)!.threads[0].root.resolved != null, true);
+  assert.equal(r.vault.notices.filter(n => /kommenterade/.test(n.text)).length, 0, 'own comments and the first full fetch are no news');
+});
+
+test('which todo a line belongs to: todo, its note and subtask, heading, text block, unsent line', async () => {
+  const r = await mk();
+  await r.anna('PUT', '/headings', [{ id: r.id('hhhh1'), level: 2, title: 'Del', who: [], notes: 'rubrikens anteckning' }]);
+  await r.todo(r.id('tttt1'), 'första', { h: r.id('hhhh1'), pos: 1, notes: 'en anteckning', subs: [{ id: r.id('ssss1'), text: 'del', tags: [], who: [], due: null, prio: 0, done: false }] });
+  await r.todo(r.id('tttt2'), 'andra', { h: r.id('hhhh1'), pos: 2 });
+  await r.todo(r.id('tttt3'), '', { h: r.id('hhhh1'), pos: 3, md: true, notes: 'ett fritt stycke' });
+  await r.dodo.enable(r.list);
+  const f = r.vault.file(r.list), L = f.split('\n');
+  const at = (needle: string, f2 = f) => r.dodo.todoAt(r.list, f2, f2.split('\n').findIndex(l => l.includes(needle)));
+  assert.equal(at('rubrikens')!.kind, 'heading');
+  assert.equal(at('## Del')!.kind, 'heading');
+  assert.deepEqual(at('första'), { kind: 'todo', id: r.id('tttt1') });
+  assert.deepEqual(at('en anteckning'), { kind: 'todo', id: r.id('tttt1') });
+  assert.deepEqual(at('- [ ] del'), { kind: 'todo', id: r.id('tttt1') });
+  assert.deepEqual(at('andra'), { kind: 'todo', id: r.id('tttt2') });
+  assert.deepEqual(at('ett fritt'), { kind: 'block', id: r.id('tttt3') });
+  assert.equal(r.dodo.todoAt(r.list, f, 0), null, 'frontmatter');
+  assert.ok(L.length > 8);
+  // typed, not sent: maps to nothing; an edited line still maps to its todo
+  const typed = f + '\n- [ ] helt ny rad\n';
+  assert.deepEqual(at('helt ny', typed), { kind: 'todo', id: null });
+  assert.deepEqual(at('andra', typed), { kind: 'todo', id: r.id('tttt2') });
+  assert.deepEqual(at('andra', f.replace('andra', 'andra och mer')) , { kind: 'todo', id: r.id('tttt2') });
+  // a comment puts a marker on the todo's first line, not on its note
+  await r.anna('POST', `/todos/${r.id('tttt1')}/comments`, { text: 'hej' });
+  await r.dodo.tick();
+  assert.deepEqual(r.dodo.commentLines(r.list, f).map(m => m.line), [L.findIndex(l => l.includes('första'))]);
+  r.dodo.markSeen(r.list, r.id('tttt1'));
+  assert.equal(r.data.seen[r.id('tttt1')] > '', true);
+});

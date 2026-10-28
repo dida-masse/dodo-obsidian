@@ -20,10 +20,10 @@ export interface Host {
   notice(text: string, action?: { label: string; run: () => void }): void;
   confirm(text: string): Promise<boolean>;
 }
-export interface Snap { me: string; users: any[]; headings: any[]; todos: any[] }
+export interface Snap { me: string; users: any[]; headings: any[]; todos: any[]; comments?: any[] }
 export interface ListData { name: string; rev: number; text: string; snap: Snap; hide: boolean; off?: boolean; lost?: boolean }
-export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; lists: Record<string, ListData> }
-export const emptyData = (): Data => ({ url: '', session: '', name: '', folder: 'dodo', hideDone: false, autoAdd: true, lists: {} });
+export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; seen: Record<string, string>; lists: Record<string, ListData> }
+export const emptyData = (): Data => ({ url: '', session: '', name: '', folder: 'dodo', hideDone: false, autoAdd: true, seen: {}, lists: {} });
 
 // a callout at the top of a note whose list is gone (the server says 404 both when it was deleted and when you were taken out of it)
 export const LOST_TITLE = '> [!warning] Listan finns inte längre i dodo';
@@ -48,6 +48,27 @@ const toFile = (head: string, text: string) => head + (text ? text + '\n' : '');
 const squash = (s: string) => s.split('\n').map(l => l.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 // the list a note belongs to, from its `dodo:` frontmatter value (https://host/l/<id>)
 export const listIdOf = (v: unknown) => (typeof v === 'string' ? v.match(/\/l\/([A-Za-z0-9_-]+)\/?\s*$/)?.[1] ?? null : null);
+// where each item of a docPlan starts (line index in the document text). A todo or block knows its lines; a heading goes on to the next item's first line.
+const TODO_LINE = /^(?:[-*+]|\d+[.)])\s+\[[ xX]\]/, FENCE_LINE = /^\s*(```|~~~)/;
+export function spans(plan: any[], lines: string[]): number[] {
+  let pos = 0;
+  while (pos < lines.length && !lines[pos].trim()) pos++;
+  return plan.map((it, i) => {
+    const start = pos;
+    if (!it.level) pos += (it.lines || it.block).length;
+    else {
+      const nxt = plan[i + 1];
+      let j = start + 1, fence = false;
+      if (!nxt) j = lines.length;
+      else for (; j < lines.length; j++) {
+        if (FENCE_LINE.test(lines[j])) { fence = !fence; continue; }
+        if (!fence && (nxt.level ? /^#{1,6}\s+\S/.test(lines[j]) : TODO_LINE.test(lines[j]))) break;
+      }
+      pos = j;
+    }
+    return start;
+  });
+}
 const fileName = (s: string) => s.replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim() || 'lista';
 
 // the smallest edit from `from` to `to` (offsets into `from`): the text before and after it is not touched, so the cursor and the scroll stay
@@ -121,9 +142,9 @@ export class Dodo {
     const canon = (w: string) => (w[0] === '@' ? (d.users.find((u: any) => u.handle === w.slice(1)) || { id: w }).id : w);
     for (const x of [...d.headings, ...d.todos, ...d.todos.flatMap((t: any) => t.subs)]) x.who = [...new Set((x.who || []).map(canon))];
     d.todos.sort((a: any, b: any) => this.md.ordKey(a) - this.md.ordKey(b));
-    return { rev: d.rev, me: d.me, users: d.users, headings: d.headings, todos: d.todos, list: d.list };
+    return { rev: d.rev, me: d.me, users: d.users, headings: d.headings, todos: d.todos, comments: d.comments || [], list: d.list };
   }
-  private snap = (S: Snap): Snap => ({ me: S.me, users: S.users, headings: S.headings, todos: S.todos });
+  private snap = (S: Snap): Snap => ({ me: S.me, users: S.users, headings: S.headings, todos: S.todos, comments: S.comments });
   // the list as the document items docPlan compares with (done todos left out when they are hidden: they are not "removed" either)
   private items(S: Snap, hide: boolean): any[] {
     this.users.length = 0; this.users.push(...S.users);
@@ -155,10 +176,11 @@ export class Dodo {
   private adding = new Set<string>();
   async tick() {
     await Promise.all([this.addNew(false), ...Object.keys(this.data.lists).map(id => this.cycle(id, false))]);
+    this.flushNews();
   }
   // a message from the event stream: a list changed, or lists were added or taken away
   event(name: string, d: any) {
-    if (name === 'rev' && d?.list && this.data.lists[d.list]) void this.cycle(d.list, false);
+    if (name === 'rev' && d?.list && this.data.lists[d.list]) void this.cycle(d.list, false).then(() => this.flushNews());
     else if (name === 'lists') { void this.addNew(true); for (const id of Object.keys(this.data.lists)) void this.cycle(id, false); } // a deleted list is noticed at once
   }
   // lists the server has that the vault has never seen are turned on; a list switched off stays off
@@ -177,7 +199,7 @@ export class Dodo {
       this.update();
     }
   }
-  flush(id: string) { return this.cycle(id, true); }
+  flush(id: string) { return this.cycle(id, true).then(() => this.flushNews()); }
 
   private cycle(id: string, now: boolean): Promise<void> {
     const p = (this.locks.get(id) ?? Promise.resolve()).then(() => this.run(id, now));
@@ -199,7 +221,7 @@ export class Dodo {
 
   // server -> note, only when the note has no unsent edits
   private async pull(id: string, ld: ListData, note: Note) {
-    const hide = this.data.hideDone, S = await this.state(id, ld.hide === hide ? ld.rev : undefined);
+    const hide = this.data.hideDone, S = await this.state(id, ld.hide === hide && ld.snap.comments ? ld.rev : undefined); // an old snapshot without comments is fetched whole once
     if (!S) return;
     await note.quiet?.();
     const file = await note.read(), { head, text } = split(file);
@@ -208,8 +230,10 @@ export class Dodo {
     if (squash(text) === squash(c)) ld.text = text;
     else if (await note.replace(file, toFile(head, c))) ld.text = c;
     else return;
+    this.news(ld.snap, S);
     Object.assign(ld, { rev: S.rev, snap: this.snap(S), hide });
     await this.d.save();
+    this.onSnap(id);
   }
 
   // note -> server: what changed against the last server version, like the web page's Markdown mode does when it saves
@@ -295,8 +319,82 @@ export class Dodo {
     const S2 = (await this.state(id))!, c = this.render(S2, ld.hide), f2 = await note.read(), cur2 = split(f2);
     if (cur2.text !== text || squash(text) === squash(c)) ld.text = text;
     else ld.text = (await note.replace(f2, toFile(cur2.head, c))) ? c : text;
+    this.news(ld.snap, S2);
     Object.assign(ld, { rev: S2.rev, snap: this.snap(S2) });
     await this.d.save();
+    this.onSnap(id);
+  }
+
+  // ---- comments ----
+  onSnap: (listId: string) => void = () => {};
+  private told: string[] = [];
+  readonly started = new Date().toISOString(); // comments before this count as old, like the web's "previous visit"
+  name(S: Snap, user: string) { return user?.[0] === '@' ? user.slice(1) : S.users.find(u => u.id === user)?.name ?? 'okänd'; }
+  // someone else's comment that was not in the last snapshot: one notice for a whole batch
+  private news(old: Snap, S: Snap) {
+    if (!old.comments) return;
+    const had = new Set(old.comments.map(c => c.id));
+    for (const c of S.comments || []) {
+      const t = S.todos.find(t => t.id === c.todo);
+      if (!had.has(c.id) && c.user !== S.me && t) this.told.push(`${this.name(S, c.user)} kommenterade »${t.md ? 'textstycket' : t.text}«`);
+    }
+  }
+  private flushNews() {
+    if (!this.told.length) return;
+    const [first, ...more] = this.told; this.told = [];
+    this.d.host.notice('dodo: ' + first + (more.length ? ` (och ${more.length} till)` : ''));
+  }
+  private fresh(S: Snap, todo: string) {
+    return (S.comments || []).some(c => c.todo === todo && c.user !== S.me && c.at > this.started && c.at > (this.data.seen[todo] || ''));
+  }
+  private plan(id: string, file: string) {
+    const ld = this.data.lists[id];
+    if (!ld) return null;
+    const { head, text } = split(file), lines = text.split('\n');
+    const plan = this.md.docPlan(this.items(ld.snap, ld.hide), text);
+    return { ld, plan, starts: spans(plan, lines), off: head.split('\n').length - 1, n: lines.length };
+  }
+  // what is at a line of the note (0-based, in the whole file): null in the frontmatter; id null = a line not sent yet
+  todoAt(id: string, file: string, line: number): { kind: 'todo' | 'heading' | 'block'; id: string | null } | null {
+    const p = this.plan(id, file);
+    if (!p || line < p.off) return null;
+    const l = line - p.off;
+    let i = -1;
+    p.starts.forEach((s, k) => { if (s <= l) i = k; });
+    if (i < 0) return null;
+    const it = p.plan[i];
+    return { kind: it.level ? 'heading' : it.block ? 'block' : 'todo', id: it.id || null };
+  }
+  // the todo lines that have comments: where a marker goes
+  commentLines(id: string, file: string): { line: number; id: string; n: number; fresh: boolean }[] {
+    const p = this.plan(id, file);
+    if (!p) return [];
+    const S = p.ld.snap, out: { line: number; id: string; n: number; fresh: boolean }[] = [];
+    p.plan.forEach((it, i) => {
+      if (it.level || it.block || !it.id) return;
+      const n = (S.comments || []).filter(c => c.todo === it.id).length;
+      if (n) out.push({ line: p.starts[i] + p.off, id: it.id, n, fresh: this.fresh(S, it.id) });
+    });
+    return out;
+  }
+  threads(id: string, todo: string) {
+    const S = this.data.lists[id]?.snap, t = S?.todos.find(t => t.id === todo);
+    if (!S || !t) return null;
+    const cs = (S.comments || []).filter(c => c.todo === todo);
+    return { todo: t, S, threads: cs.filter(c => !c.parent).map(root => ({ root, replies: cs.filter(c => c.parent === root.id) })) };
+  }
+  markSeen(id: string, todo: string) {
+    const last = (this.data.lists[id]?.snap.comments || []).filter(c => c.todo === todo).reduce((m, c) => (c.at > m ? c.at : m), '');
+    if (last && this.data.seen[todo] !== last) { this.data.seen[todo] = last; void this.d.save(); this.onSnap(id); }
+  }
+  // posted like the web does; a reply names the comment it answers
+  async comment(id: string, todo: string, text: string, parent?: string) {
+    await this.call('POST', `/api/l/${id}/todos/${todo}/comments`, parent ? { text, parent } : { text });
+    await this.flush(id);
+  }
+  async resolve(id: string, comment: string, resolved: boolean) {
+    await this.call('PUT', `/api/l/${id}/comments/${comment}`, { resolved });
+    await this.flush(id);
   }
 
   // ---- errors and status ----
