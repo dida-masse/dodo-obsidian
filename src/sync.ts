@@ -39,6 +39,17 @@ const squash = (s: string) => s.split('\n').map(l => l.trimEnd()).join('\n').rep
 export const listIdOf = (v: unknown) => (typeof v === 'string' ? v.match(/\/l\/([A-Za-z0-9_-]+)\/?\s*$/)?.[1] ?? null : null);
 const fileName = (s: string) => s.replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim() || 'lista';
 
+// the smallest edit from `from` to `to` (offsets into `from`): the text before and after it is not touched, so the cursor and the scroll stay
+export function minimalChange(from: string, to: string) {
+  const max = Math.min(from.length, to.length), hi = (s: string, i: number) => { const c = s.charCodeAt(i); return c >= 0xd800 && c < 0xdc00; };
+  let a = 0, b = 0;
+  while (a < max && from[a] === to[a]) a++;
+  while (b < max - a && from[from.length - 1 - b] === to[to.length - 1 - b]) b++;
+  if (a && hi(from, a - 1)) a--; // never in the middle of an emoji
+  if (b && hi(to, to.length - b - 1)) b--;
+  return { from: a, to: from.length - b, text: to.slice(a, to.length - b) };
+}
+
 export class Fail extends Error { status?: number; offline?: boolean; data?: any; lost?: boolean }
 
 export class Dodo {
