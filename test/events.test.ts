@@ -54,3 +54,21 @@ test('a stream that goes silent is dropped (a computer that slept)', async () =>
   assert.ok(await until(() => states.includes(false), 1000), 'dropped after silence');
   s.close();
 });
+
+test('a dropped stream opens one new connection, not one per report of the drop (no pile-up)', async () => {
+  const http = load('http');
+  let total = 0;
+  const fake = http.createServer((_q: any, res: any) => {
+    total++;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    setTimeout(() => res.end(), 50); // a proxy that cuts the stream
+  });
+  await new Promise<void>(ok => fake.listen(0, '127.0.0.1', ok));
+  // Electron's Node can report one drop twice, as 'end' and as 'error'
+  const twice = (m: string) => m !== 'http' ? load(m) : { request: (u: any, o: any, cb: any) => http.request(u, o, (res: any) => { res.on('end', () => res.emit('error', new Error('aborted'))); cb(res); }) };
+  const s = nodeStream(twice)({ url: `http://127.0.0.1:${fake.address().port}`, session: 'x', onState: () => {}, onEvent: () => {} });
+  await sleep(4500);
+  s.close();
+  fake.closeAllConnections(); await new Promise(ok => fake.close(ok));
+  assert.ok(total <= 6, `${total} connections in 4.5 s`);
+});

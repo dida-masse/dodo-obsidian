@@ -12,17 +12,18 @@ export const nodeStream = (load: (m: string) => any, silentMs = SILENT_MS): Stre
     clearTimeout(dog); try { req?.destroy(); } catch { /* already gone */ }
     state(false);
     if (closed) return;
-    retry = setTimeout(connect, delay);
+    clearTimeout(retry); retry = setTimeout(connect, delay);
     delay = Math.min(delay * 2, 30000);
   };
   const connect = () => {
     const u = new URL(o.url + '/api/events');
     const mod = load(u.protocol === 'https:' ? 'https' : 'http');
-    let buf = '', name = '';
+    let buf = '', name = '', done = false;
+    const drop = () => { if (!done) { done = true; again(); } }; // a socket can report its end several times ('end', 'error', the watchdog): reconnect once, or the streams multiply
     req = mod.request(u, { headers: { authorization: 'Bearer ' + o.session, accept: 'text/event-stream' } }, (res: any) => {
-      if (res.statusCode !== 200) { res.resume(); return again(); }
+      if (res.statusCode !== 200) { res.resume(); return drop(); }
       delay = 1000; state(true);
-      const watch = () => { clearTimeout(dog); dog = setTimeout(again, silentMs); };
+      const watch = () => { clearTimeout(dog); dog = setTimeout(drop, silentMs); };
       watch();
       res.setEncoding('utf8');
       res.on('data', (chunk: string) => {
@@ -36,9 +37,9 @@ export const nodeStream = (load: (m: string) => any, silentMs = SILENT_MS): Stre
           else if (!line) name = '';
         }
       });
-      res.on('end', again); res.on('error', again);
+      res.on('end', drop); res.on('error', drop);
     });
-    req.on('error', again);
+    req.on('error', drop);
     req.end();
   };
   connect();
