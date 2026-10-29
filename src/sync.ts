@@ -188,9 +188,23 @@ export class Dodo {
   private async renamed(id: string, ld: ListData, name: string) {
     const base = this.d.host.base(id);
     const was = fileName(ld.name);
+    ld.name = name; // before the rename, so the vault's rename event for it is seen as already known
     if (base === was || base?.replace(/ \d+$/, '') === was) await this.d.host.rename(id, fileName(name)); // or »Handla 2« when the name was taken
-    ld.name = name;
     await this.d.save();
+  }
+  // the user renamed the note in Obsidian: the list gets that name for everyone if they are its admin, otherwise the note keeps its own name
+  async noteRenamed(id: string) {
+    const ld = this.data.lists[id], base = this.d.host.base(id);
+    if (!ld || ld.off || ld.lost || !base || !this.data.session) return;
+    const now = fileName(ld.name);
+    if (base === now || base.replace(/ \d+$/, '') === now) return; // our own rename, or »Namn 2« made because the name was taken
+    try {
+      await this.call('PUT', `/api/l/${id}`, { name: base });
+      ld.name = base; await this.d.save();
+    } catch (e: any) {
+      if (e.status === 403) this.d.host.notice('Bara listans admin kan byta namn på listan; anteckningen behåller sitt eget namn.');
+      else if (!e.offline) this.errs.set(id, e.message || String(e));
+    }
   }
   // the note was opened: what others did since I last looked is fetched (like the web's "new since last time"), and it counts as seen everywhere
   async opened(id: string) {

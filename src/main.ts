@@ -89,7 +89,7 @@ export default class DodoPlugin extends Plugin implements Host {
 
     this.registerEvent(this.app.workspace.on('editor-change', (_e: Editor, info: MarkdownFileInfo) => { if (info.file) { this.typed.set(info.file.path, Date.now()); this.changed(info.file); } }));
     this.registerEvent(this.app.vault.on('modify', f => { if (f instanceof TFile) this.changed(f); }));
-    this.registerEvent(this.app.vault.on('rename', () => this.paintDots()));
+    this.registerEvent(this.app.vault.on('rename', f => { this.paintDots(); const id = f instanceof TFile ? this.idOf(f) : null; if (id) void this.dodo.noteRenamed(id); }));
     this.registerEvent(this.app.vault.on('delete', f => { for (const [id, t] of this.pinned) if (t === f) this.pinned.delete(id); }));
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => { // leaving a note sends it at once
       const prev = this.last, now = this.app.workspace.getActiveFile();

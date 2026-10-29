@@ -93,6 +93,38 @@ test('a list renamed in dodo renames its note; a note given its own name in Obsi
   assert.equal(r.data.lists[r.list].name, 'Tredje');
 });
 
+test('renaming the note in Obsidian renames the list for its admin; a plain member keeps the note name and is told once; our own renames are not sent back', async () => {
+  const r = await mk('Gammal'); await seed(r); await r.dodo.enable(r.list);
+  const name = async () => (await state(r)).list.name;
+  const puts = () => writes(r.log).filter(l => l.method === 'PUT' && l.path.endsWith(r.list)).length; // the plugin's own, the test's fetch is not logged
+  await r.vault.rename(r.list, 'Mitt eget namn'); // admin: the list follows the note
+  await r.dodo.noteRenamed(r.list);
+  assert.equal(await name(), 'Mitt eget namn');
+  assert.equal(r.data.lists[r.list].name, 'Mitt eget namn');
+  assert.equal(puts(), 1);
+  await r.dodo.noteRenamed(r.list); // same name, and a »2« suffix made for a taken name: nothing is sent
+  await r.vault.rename(r.list, 'Mitt eget namn 2');
+  await r.dodo.noteRenamed(r.list);
+  assert.equal(puts(), 1);
+  r.dodo.listCheckEvery = 0; // dodo renames the list, the note follows, and the vault's rename event for it sends nothing
+  await fetch(`${srv.url}/api/l/${r.list}`, { method: 'PUT', headers: { authorization: 'Bearer ' + ses.boss, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Från dodo' }) });
+  await r.dodo.tick();
+  await r.dodo.noteRenamed(r.list);
+  assert.deepEqual([...r.vault.files.keys()], ['dodo/Från dodo.md']);
+  assert.equal(await name(), 'Från dodo');
+  assert.equal(puts(), 1);
+  const av = new FakeVault(), ad = emptyData(); // a member who is not admin: 403, the list keeps its name, one notice
+  Object.assign(ad, { url: srv.url, session: ses.anna, name: 'Anna', autoAdd: false });
+  const anna = new Dodo(ad, { http: fetchHttp(), host: av, save: () => {}, openSettings: () => {} });
+  await anna.enable(r.list);
+  await av.rename(r.list, 'Annas namn');
+  await anna.noteRenamed(r.list);
+  assert.equal(await name(), 'Från dodo');
+  assert.equal(ad.lists[r.list].name, 'Från dodo');
+  assert.deepEqual(av.notices.map(n => n.text), ['Bara listans admin kan byta namn på listan; anteckningen behåller sitt eget namn.']);
+  assert.deepEqual([...av.files.keys()], ['dodo/Annas namn.md']);
+});
+
 test('a note changed by someone else is marked until it is opened; my own edits, hiding done todos and an open note are not', async () => {
   const r = await mk(); await seed(r); await r.dodo.enable(r.list);
   await (r.dodo as any).call('POST', `/api/l/${r.list}/seen`, {}); await sleep(5); // a start where everything is seen
