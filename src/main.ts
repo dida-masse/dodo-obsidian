@@ -55,11 +55,13 @@ export default class DodoPlugin extends Plugin implements Host {
   private indexed = false;
   private up = false;
   private poll?: number;
+  private dots?: HTMLStyleElement;
 
   async onload() {
     this.data = Object.assign(emptyData(), await this.loadData());
     this.dodo = new Dodo(this.data, { http, host: this, save: () => this.saveData(this.data), openSettings: () => this.openSettings() });
     this.dodo.onStatus = () => this.paint();
+    this.dodo.onFresh = () => { this.paint(); this.paintDots(); };
     this.dodo.onSnap = () => { this.panels().forEach(p => p.refresh()); refreshMarks(); };
     this.registerView(VIEW, leaf => new CommentsView(leaf, this.dodo));
     this.addCommand({ id: 'show-comments', name: 'Visa kommentarer', callback: () => void this.showPanel() });
@@ -73,27 +75,29 @@ export default class DodoPlugin extends Plugin implements Host {
     this.dodo.onLists = () => { if (tab.containerEl.isConnected) tab.display(); }; // an open settings tab is not left showing old toggles
     this.addSettingTab(tab);
     this.addCommand({ id: 'add-list', name: 'Lägg till lista', callback: () => this.addList() });
-    if (Platform.isDesktop) { this.bar = this.addStatusBarItem(); this.bar.addClass('mod-clickable'); this.bar.onClickEvent(() => new Notice(this.dodo.lastError || 'dodo: allt är skickat.')); this.paint(); }
+    if (Platform.isDesktop) { this.bar = this.addStatusBarItem(); this.bar.addClass('mod-clickable'); this.bar.onClickEvent(() => { const f = this.dodo.updated().map(id => this.fileFor(id)).find(Boolean); if (f && !this.dodo.lastError) void this.app.workspace.getLeaf().openFile(f); else new Notice(this.dodo.lastError || 'dodo: allt är skickat.'); }); this.paint(); }
 
     this.registerEvent(this.app.workspace.on('editor-change', (_e: Editor, info: MarkdownFileInfo) => { if (info.file) { this.typed.set(info.file.path, Date.now()); this.changed(info.file); } }));
     this.registerEvent(this.app.vault.on('modify', f => { if (f instanceof TFile) this.changed(f); }));
+    this.registerEvent(this.app.vault.on('rename', () => this.paintDots()));
     this.registerEvent(this.app.vault.on('delete', f => { for (const [id, t] of this.pinned) if (t === f) this.pinned.delete(id); }));
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => { // leaving a note sends it at once
       const prev = this.last, now = this.app.workspace.getActiveFile();
       if (prev && prev !== now) { const id = this.idOf(prev); if (id) void this.dodo.flush(id); }
       this.last = now;
+      this.openedActive();
       this.syncPanel();
     }));
     // notes are found by their frontmatter: before the cache has read every file an existing note looks missing, and a second one would be made
     const mc = this.app.metadataCache as typeof this.app.metadataCache & { resolved?: boolean }; // not in the typings: unknown means go on as before
-    if (mc.resolved !== false) this.indexed = true; else this.registerEvent(mc.on('resolved', () => { this.indexed = true; }));
+    if (mc.resolved !== false) this.indexed = true; else this.registerEvent(mc.on('resolved', () => { if (!this.indexed) { this.indexed = true; this.paintDots(); } }));
     const loop = () => { this.poll = window.setTimeout(() => { void this.tick().finally(loop); }, this.up ? SAFETY_MS : POLL_MS); };
     loop();
     this.registerDomEvent(window, 'focus', () => void this.tick());
-    this.registerDomEvent(document, 'visibilitychange', () => { if (!document.hidden) void this.tick(); });
-    this.app.workspace.onLayoutReady(() => { this.last = this.app.workspace.getActiveFile(); this.openStream(); void this.tick(); });
+    this.registerDomEvent(document, 'visibilitychange', () => { if (!document.hidden) { this.openedActive(); void this.tick(); } });
+    this.app.workspace.onLayoutReady(() => { this.last = this.app.workspace.getActiveFile(); this.openStream(); this.paintDots(); void this.tick(); });
   }
-  onunload() { window.clearTimeout(this.poll); this.stream?.close(); for (const t of this.timers.values()) window.clearTimeout(t); }
+  onunload() { this.dots?.remove(); window.clearTimeout(this.poll); this.stream?.close(); for (const t of this.timers.values()) window.clearTimeout(t); }
 
   // desktop only: the server says at once when something changes (requestUrl cannot stream, so Node's http is used)
   openStream() {
@@ -113,7 +117,8 @@ export default class DodoPlugin extends Plugin implements Host {
   }
   private paint() {
     if (!this.bar) return;
-    this.bar.setText(!this.data.session || !Object.keys(this.data.lists).length ? '' : this.dodo.status === 'busy' ? 'dodo …' : this.dodo.status === 'err' ? 'dodo !' : 'dodo ✓');
+    const n = this.dodo.updated().length;
+    this.bar.setText(!this.data.session || !Object.keys(this.data.lists).length ? '' : (this.dodo.status === 'busy' ? 'dodo …' : this.dodo.status === 'err' ? 'dodo !' : 'dodo ✓') + (n ? ` · ${n} uppdaterad${n > 1 ? 'e' : ''}` : ''));
   }
   private panels() { return this.app.workspace.getLeavesOfType(VIEW).map(l => l.view).filter((v): v is CommentsView => v instanceof CommentsView); }
   async showPanel() {
@@ -175,6 +180,16 @@ export default class DodoPlugin extends Plugin implements Host {
     return null;
   }
 
+  // the note in front of the user has been seen
+  private openedActive() { const f = this.app.workspace.getActiveFile(), id = f && this.idOf(f); if (id) this.dodo.opened(id); }
+  // a dot after the names of notes others have changed, in the file list. One style sheet by path: it survives the list being redrawn,
+  // and if Obsidian renames its classes the dots just stop showing
+  private paintDots() {
+    this.dots ??= document.head.createEl('style');
+    this.dots.textContent = this.dodo.updated().map(id => this.fileFor(id)?.path).filter(Boolean)
+      .map(p => `.nav-file-title[data-path="${CSS.escape(p!)}"] .nav-file-title-content::after { content: " ●"; color: var(--interactive-accent); }`).join('\n');
+  }
+
   // ---- Host ----
   note(id: string): Note | null {
     const file = this.fileFor(id), vault = this.app.vault;
@@ -208,6 +223,7 @@ export default class DodoPlugin extends Plugin implements Host {
     await this.app.fileManager.renameFile(file, normalizePath(freeName(dir, stem, p => p.toLowerCase() !== self && this.exists(p)).path)); // links follow
   }
   base(id: string) { return this.fileFor(id)?.basename ?? null; }
+  viewing(id: string) { const f = this.fileFor(id); return !!f && !document.hidden && this.app.workspace.getActiveFile() === f; }
   exists(path: string) { const l = path.toLowerCase(); return this.app.vault.getAllLoadedFiles().some(f => f.path.toLowerCase() === l); }
   async create(path: string, text: string) {
     path = normalizePath(path);

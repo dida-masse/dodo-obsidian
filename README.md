@@ -23,6 +23,7 @@ Sessionen sparas bara i pluginets egna data (`data.json`), aldrig i anteckningar
 - Har både du och någon annan ändrat samma uppgift står dodos version kvar, och din text läggs som en kommentar på uppgiften, med en notis.
 - Offline sparas allt i anteckningen och skickas när nätet är tillbaka. Är du utloggad får du en notis med en knapp för att logga in igen. Försvinner du ur en lista får anteckningen en rad överst om det och hålls inte längre i takt; filen tas aldrig bort utan flyttas till `dodo/Borttagna/` (länkar följer med).
 - Statusraden (dator) visar *dodo ✓*, *dodo …* eller *dodo !*; ett klick visar vad som gick fel.
+- Har någon annan ändrat en lista sedan du senast hade anteckningen framme får den en prick ● efter namnet i fillistan, och statusraden visar *· 2 uppdaterade*; ett klick där öppnar den senast ändrade. Pricken försvinner när du öppnar anteckningen. Byter en lista namn i dodo byter anteckningen namn också, om du inte har gett den ett eget namn.
 - Inställningen *Dölj klara uppgifter* tar bort dem ur anteckningen utan att ta bort dem i dodo.
 
 ## Det som inte finns i anteckningen

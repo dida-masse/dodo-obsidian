@@ -18,14 +18,15 @@ export interface Host {
   move(listId: string, dir: string): Promise<void>; // the note goes into `dir` under a free name; links follow
   rename(listId: string, stem: string): Promise<void>; // the note gets a new free name in its folder; links follow
   base(listId: string): string | null; // the note's file name without .md
+  viewing?(listId: string): boolean; // the note is in front of the user right now
   create(path: string, text: string): Promise<Note>;
   notice(text: string, action?: { label: string; run: () => void }): void;
   confirm(text: string): Promise<boolean>;
 }
 export interface Snap { me: string; users: any[]; headings: any[]; todos: any[]; comments?: any[] }
 export interface ListData { name: string; rev: number; text: string; snap: Snap; hide: boolean; off?: boolean; lost?: boolean }
-export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; seen: Record<string, string>; since: string; lists: Record<string, ListData> }
-export const emptyData = (): Data => ({ url: '', session: '', name: '', folder: 'dodo', hideDone: false, autoAdd: true, seen: {}, since: '', lists: {} });
+export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; seen: Record<string, string>; since: string; lists: Record<string, ListData>; fresh: Record<string, number> }
+export const emptyData = (): Data => ({ url: '', session: '', name: '', folder: 'dodo', hideDone: false, autoAdd: true, seen: {}, since: '', lists: {}, fresh: {} });
 
 // a callout at the top of a note whose list is gone (the server says 404 both when it was deleted and when you were taken out of it)
 export const LOST_TITLE = '> [!warning] Listan finns inte längre i dodo';
@@ -91,6 +92,7 @@ export class Dodo {
   lastError = '';
   authLost = false;
   onStatus: () => void = () => {};
+  onFresh: () => void = () => {}; // which notes have news from others changed: the status bar and the file list show it
   onLists: () => void = () => {}; // a list was turned on or lost: the settings tab shows it
   private md: Md;
   private users: any[] = [];
@@ -185,6 +187,9 @@ export class Dodo {
     ld.name = name;
     await this.d.save();
   }
+  // the note was opened: its news from others are seen
+  opened(id: string) { if (this.data.fresh[id]) { delete this.data.fresh[id]; void this.d.save(); this.onFresh(); } }
+  updated() { return Object.keys(this.data.fresh).filter(id => this.data.lists[id] && !this.data.lists[id].lost).sort((a, b) => this.data.fresh[b] - this.data.fresh[a]); }
   async disable(id: string) { if (this.data.lists[id]) { this.data.lists[id].off = true; await this.d.save(); } }
 
   // ---- when to sync ----
@@ -247,9 +252,11 @@ export class Dodo {
     const file = await note.read(), { head, text } = split(file);
     if (text !== ld.text) return; // typed meanwhile: it is sent first, next time
     const c = this.render(S, hide);
+    let wrote = false;
     if (squash(text) === squash(c)) ld.text = text;
-    else if (await note.replace(file, toFile(head, c))) ld.text = c;
+    else if (await note.replace(file, toFile(head, c))) { ld.text = c; wrote = ld.hide === hide; } // not when it was only done todos shown or hidden
     else return;
+    if (wrote && !this.d.host.viewing?.(id)) { this.data.fresh[id] = Date.now(); this.onFresh(); } // my own edits never come back this way: what I sent already matches
     this.news(ld.snap, S);
     Object.assign(ld, { rev: S.rev, snap: this.snap(S), hide });
     await this.d.save();

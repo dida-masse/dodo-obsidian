@@ -93,6 +93,29 @@ test('a list renamed in dodo renames its note; a note given its own name in Obsi
   assert.equal(r.data.lists[r.list].name, 'Tredje');
 });
 
+test('a note changed by someone else is marked until it is opened; my own edits, hiding done todos and an open note are not', async () => {
+  const r = await mk(); await seed(r); await r.dodo.enable(r.list);
+  let told = 0; r.dodo.onFresh = () => told++;
+  r.vault.edit(r.list, t => t + '\n- [ ] mitt');
+  await r.dodo.flush(r.list); await r.dodo.tick();
+  assert.deepEqual(r.dodo.updated(), [], 'my own edit');
+  await r.todo(r.id('tttt4'), 'ost', { h: r.id('hhhh1'), pos: 4 });
+  await r.dodo.tick();
+  assert.deepEqual(r.dodo.updated(), [r.list]);
+  assert.equal(told, 1);
+  r.dodo.opened(r.list);
+  assert.deepEqual(r.dodo.updated(), []);
+  await r.todo(r.id('tttt1'), 'mjölk', { h: r.id('hhhh1'), tags: ['mat'], pos: 1, done: true, doneBy: 'x', doneAt: Date.now() });
+  await r.dodo.tick(); r.dodo.opened(r.list);
+  r.dodo.data.hideDone = true;
+  await r.dodo.tick();
+  assert.deepEqual(r.dodo.updated(), [], 'only hiding done todos');
+  r.vault.looking.add(r.list);
+  await r.todo(r.id('tttt5'), 'smör igen', { h: r.id('hhhh1'), pos: 5 });
+  await r.dodo.tick();
+  assert.deepEqual(r.dodo.updated(), [], 'the note was open');
+});
+
 test('an unchanged note sends nothing, also after blank lines and repeated polling', async () => {
   const r = await mk(); await seed(r); await r.dodo.enable(r.list);
   r.log.length = 0;

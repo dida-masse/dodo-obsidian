@@ -70,6 +70,8 @@ export class FakeVault implements Host {
     const t = this.files.get(from)!; this.files.delete(from); this.files.set(to, t);
   }
   base(id: string) { const p = this.path(id); return p ? p.split('/').pop()!.replace(/\.md$/, '') : null; }
+  looking = new Set<string>();
+  viewing(id: string) { return this.looking.has(id); }
   exists(p: string) { return this.files.has(p); }
   async create(p: string, text: string) { this.files.set(p, text); return this.note(listIdOf(text.match(/dodo:\s*(\S+)/)![1])!)!; }
   notice(text: string, action?: any) { this.notices.push({ text, action }); }
