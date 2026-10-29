@@ -161,6 +161,13 @@ export class Dodo {
     const h = this.d.host, old = this.data.lists[id];
     if (old && h.note(id)) { old.off = false; old.lost = false; await this.d.save(); return this.flush(id); }
     const S = (await this.state(id))!, hide = this.data.hideDone, text = this.render(S, hide);
+    const there = h.note(id);
+    if (there) { // the vault already has it (synced from another computer, whose plugin made it): take that note, and dodo's version wins
+      const file = await there.read(), { head } = split(file);
+      if (split(file).text !== text) await there.replace(file, toFile(head, text));
+      this.data.lists[id] = { name: S.list.name, rev: S.rev, text, snap: this.snap(S), hide };
+      return this.d.save();
+    }
     const stem = fileName(S.list.name), dir = this.data.folder.replace(/^\/+|\/+$/g, '');
     const { path, n } = freeName(dir, stem, h.exists.bind(h));
     await h.create(path, toFile(`---\ndodo: ${this.data.url}/l/${id}\n---\n`, text));
@@ -243,6 +250,10 @@ export class Dodo {
     const items = this.items(ld.snap, ld.hide);
     const S = (await this.state(id))!; // the newest state first, so only what I changed is written over others' work
     this.users.length = 0; this.users.push(...S.users);
+    if (squash(text) === squash(this.render(S, ld.hide))) { // the note already says what dodo says: the edit came with the vault from another computer, which sent it
+      Object.assign(ld, { text, rev: S.rev, snap: this.snap(S) });
+      return this.d.save();
+    }
     const plan = md.docPlan(items, text), at = new Map(items.map(x => [x.id, x.at])), inDoc = new Set(items.map(x => x.id));
 
     const kept = new Set(plan.filter(p => p.id).map(p => p.id)), todos = items.filter(i => !i.heading && !i.block);

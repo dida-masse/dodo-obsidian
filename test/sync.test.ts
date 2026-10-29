@@ -49,6 +49,34 @@ test('first sync writes the note with frontmatter; a name already taken is never
   assert.match(r.vault.notices[0].text, /fanns redan/);
 });
 
+// a second computer with the same vault (Obsidian Sync, iCloud, git): its own plugin data is empty, the notes are already there
+const second = (r: Rig) => {
+  const log: any[] = [], data = emptyData();
+  Object.assign(data, { url: srv.url, session: ses.boss, name: 'Boss', autoAdd: false });
+  return { log, data, dodo: new Dodo(data, { http: fetchHttp(log), host: r.vault, save: () => {}, openSettings: () => {} }) };
+};
+
+test('a second computer takes the note that is already in the vault, never makes a "2", and dodo wins', async () => {
+  const r = await mk('Handla'); await seed(r); await r.dodo.enable(r.list);
+  await r.todo(r.id('tttt4'), 'ost', { h: r.id('hhhh1'), pos: 4 }); // changed in dodo since the vault was synced
+  const b = second(r);
+  await b.dodo.enable(r.list);
+  assert.deepEqual([...r.vault.files.keys()], [`dodo/Handla ${n}.md`]);
+  assert.equal(body(r), '## Inköp\n- [ ] mjölk #mat\n- [ ] bröd !hög\n- [ ] smör\n- [ ] ost');
+  assert.deepEqual(writes(b.log), []);
+  assert.equal(r.vault.notices.length, 0);
+});
+
+test('an edit synced in from the other computer, already sent from there, is not sent again (no duplicates)', async () => {
+  const r = await mk(); await seed(r); await r.dodo.enable(r.list);
+  const b = second(r); await b.dodo.enable(r.list);
+  r.vault.edit(r.list, t => t + '\n- [ ] ägg');
+  await r.dodo.flush(r.list); // the first computer sends it; the second sees the same file change
+  await b.dodo.flush(r.list);
+  assert.deepEqual(writes(b.log), []);
+  assert.equal((await state(r)).todos.filter((t: any) => t.text === 'ägg').length, 1);
+});
+
 test('an unchanged note sends nothing, also after blank lines and repeated polling', async () => {
   const r = await mk(); await seed(r); await r.dodo.enable(r.list);
   r.log.length = 0;

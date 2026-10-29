@@ -52,6 +52,7 @@ export default class DodoPlugin extends Plugin implements Host {
   private ticking = false;
   private last: TFile | null = null;
   private stream?: { close(): void };
+  private indexed = false;
   private up = false;
   private poll?: number;
 
@@ -83,6 +84,9 @@ export default class DodoPlugin extends Plugin implements Host {
       this.last = now;
       this.syncPanel();
     }));
+    // notes are found by their frontmatter: before the cache has read every file an existing note looks missing, and a second one would be made
+    const mc = this.app.metadataCache as typeof this.app.metadataCache & { resolved?: boolean }; // not in the typings: unknown means go on as before
+    if (mc.resolved !== false) this.indexed = true; else this.registerEvent(mc.on('resolved', () => { this.indexed = true; }));
     const loop = () => { this.poll = window.setTimeout(() => { void this.tick().finally(loop); }, this.up ? SAFETY_MS : POLL_MS); };
     loop();
     this.registerDomEvent(window, 'focus', () => void this.tick());
@@ -103,7 +107,7 @@ export default class DodoPlugin extends Plugin implements Host {
   }
 
   private async tick() {
-    if (this.ticking || !this.data.session) return;
+    if (this.ticking || !this.data.session || !this.indexed) return;
     this.ticking = true;
     try { await this.dodo.tick(); } finally { this.ticking = false; }
   }
