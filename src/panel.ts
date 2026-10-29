@@ -1,9 +1,19 @@
-// The side panel: the comment threads of the todo at the cursor, shown like the web does (replies indented, resolved threads folded).
+// The side panel: what others did in the open note since I last looked, and the comment threads of the todo at the cursor,
+// shown like the web does (replies indented, resolved threads folded).
 import { ItemView, MarkdownRenderer, Notice, type WorkspaceLeaf } from 'obsidian';
-import type { Dodo } from './sync.js';
+import type { Dodo, News } from './sync.js';
 
 export const VIEW = 'dodo-comments';
 /* eslint-disable @typescript-eslint/no-explicit-any */
+const short = (s?: string) => { s = String(s || '').split('\n')[0]; return s.length > 40 ? s.slice(0, 39) + '…' : s; };
+const DID: Record<string, string> = { add: 'lade till', change: 'ändrade', done: 'bockade av', delete: 'tog bort' };
+// one line of news, like the web's: "Anna lade till »ost«", "Bo lämnade listan"
+export function newsLine(dodo: Dodo, list: string, x: News) {
+  const S = dodo.data.lists[list]?.snap, nm = (u: string) => (S ? dodo.name(S, u) : 'någon');
+  if (x.kind in DID) return `${nm(x.by)} ${DID[x.kind]} ${x.md ? 'ett textstycke' : `»${short(x.text)}«`}`;
+  return `${nm(x.who!)} ${x.kind === 'join' ? 'lades till i listan' : x.kind === 'out' ? 'togs bort ur listan' : 'lämnade listan'}`;
+}
+export interface PanelHost { active(): string | null; reveal(list: string, todo: string): void }
 const when = (at: string) => new Date(at).toLocaleString('sv-SE', { dateStyle: 'short', timeStyle: 'short' });
 
 export class CommentsView extends ItemView {
@@ -14,7 +24,7 @@ export class CommentsView extends ItemView {
   private unfolded = new Set<string>();
   private drafts = new Map<string, string>(); // "new" or a comment id -> unsent text
 
-  constructor(leaf: WorkspaceLeaf, private dodo: Dodo) { super(leaf); }
+  constructor(leaf: WorkspaceLeaf, private dodo: Dodo, private host: PanelHost) { super(leaf); }
   getViewType() { return VIEW; }
   getDisplayText() { return 'Kommentarer'; }
   getIcon() { return 'message-square'; }
@@ -29,7 +39,8 @@ export class CommentsView extends ItemView {
 
   private render(force: boolean) {
     const el = this.contentEl, data = this.list && this.todo ? this.dodo.threads(this.list, this.todo) : null;
-    const sig = JSON.stringify([this.list, this.todo, data?.todo.text, data?.threads, this.reply, [...this.unfolded]]);
+    const act = this.host.active(), news = act ? this.dodo.whatsNew(act) : [];
+    const sig = JSON.stringify([this.list, this.todo, data?.todo.text, data?.threads, this.reply, [...this.unfolded], act, news, news.map(x => !!x.todo && this.has(act!, x.todo))]);
     if (!force && sig === this.sig) return;
     this.sig = sig;
     // what is being typed survives a redraw
@@ -37,6 +48,7 @@ export class CommentsView extends ItemView {
     if (typing instanceof HTMLTextAreaElement) this.drafts.set(typing.dataset.key!, typing.value);
     const focused = typing && document.activeElement === typing ? typing.dataset.key : null;
     el.empty();
+    if (act && news.length) this.renderNews(el, act, news);
     if (!data) { el.createEl('p', { cls: 'dodo-hint', text: 'Flytta markören till en uppgift i en dodo-anteckning, så syns dess kommentarer här.' }); return; }
     const { todo, S, threads } = data, list = this.list!;
     el.createEl('h4', { cls: 'dodo-title', text: todo.md ? 'Textstycke' : todo.text });
@@ -87,6 +99,20 @@ export class CommentsView extends ItemView {
     const row = f.createDiv({ cls: 'dodo-row' });
     if (key !== 'new') row.createEl('button', { text: 'Avbryt' }).onclick = () => { this.reply = null; this.drafts.delete(key); this.render(true); };
     row.createEl('button', { text: 'Skicka', cls: 'mod-cta' }).onclick = () => void go();
+  }
+  private has(list: string, todo: string) { return !!this.dodo.data.lists[list]?.snap.todos.some(t => t.id === todo); }
+  private renderNews(el: HTMLElement, list: string, news: News[]) {
+    const box = el.createDiv({ cls: 'dodo-news' });
+    box.createEl('h4', { cls: 'dodo-title', text: 'Nytt sedan sist' });
+    for (const x of news.slice().reverse()) {
+      const row = box.createDiv({ cls: 'dodo-news-row' });
+      row.createSpan({ cls: 'dodo-when', text: when(x.at) });
+      const t = row.createSpan({ text: newsLine(this.dodo, list, x) });
+      if (x.todo && x.kind !== 'delete' && this.has(list, x.todo)) { t.addClass('dodo-link'); t.onclick = () => this.host.reveal(list, x.todo!); }
+      if (x.kind === 'delete' && x.data && !this.has(list, x.todo!)) {
+        row.createEl('button', { text: 'Ångra' }).onclick = () => this.run(this.dodo.restore(list, x).then(() => { new Notice('dodo: uppgiften är tillbaka'); this.render(true); }));
+      }
+    }
   }
   private async run(p: Promise<void>) { try { await p; } catch (e) { new Notice('dodo: ' + (e as Error).message); } }
 }

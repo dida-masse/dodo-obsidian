@@ -95,6 +95,7 @@ test('a list renamed in dodo renames its note; a note given its own name in Obsi
 
 test('a note changed by someone else is marked until it is opened; my own edits, hiding done todos and an open note are not', async () => {
   const r = await mk(); await seed(r); await r.dodo.enable(r.list);
+  await (r.dodo as any).call('POST', `/api/l/${r.list}/seen`, {}); await sleep(5); // a start where everything is seen
   let told = 0; r.dodo.onFresh = () => told++;
   r.vault.edit(r.list, t => t + '\n- [ ] mitt');
   await r.dodo.flush(r.list); await r.dodo.tick();
@@ -114,6 +115,41 @@ test('a note changed by someone else is marked until it is opened; my own edits,
   await r.todo(r.id('tttt5'), 'smör igen', { h: r.id('hhhh1'), pos: 5 });
   await r.dodo.tick();
   assert.deepEqual(r.dodo.updated(), [], 'the note was open');
+});
+
+test('opening a marked note shows what others did since I last looked, marks those lines, can bring back a deleted todo, and counts as seen everywhere', async () => {
+  const r = await mk(); await seed(r); await r.dodo.enable(r.list);
+  await r.dodo.left(r.list); await (r.dodo as any).call('POST', `/api/l/${r.list}/seen`, {}); // a start where everything is seen
+  await sleep(5);
+  await r.todo(r.id('tttt4'), 'ost', { h: r.id('hhhh1'), pos: 4 });
+  await r.todo(r.id('tttt2'), 'bröd fullkorn', { h: r.id('hhhh1'), prio: 1, pos: 2 });
+  await r.anna('DELETE', '/todos/' + r.id('tttt3'));
+  await r.dodo.tick();
+  assert.deepEqual(r.dodo.updated(), [r.list]);
+  let told = 0; r.dodo.onNews = () => told++;
+  await r.dodo.opened(r.list);
+  assert.deepEqual(r.dodo.updated(), []);
+  const news = r.dodo.whatsNew(r.list);
+  assert.deepEqual(news.map(x => [x.kind, x.text]).sort(), [['add', 'ost'], ['change', 'bröd fullkorn'], ['delete', 'smör']]);
+  assert.equal(told, 1);
+  const lines = r.vault.file(r.list).split('\n');
+  assert.deepEqual(r.dodo.newsLines(r.list, r.vault.file(r.list)).map(i => lines[i]).sort(), ['- [ ] bröd fullkorn !hög', '- [ ] ost']);
+  await r.dodo.restore(r.list, news.find(x => x.kind === 'delete')!);
+  assert.match(body(r), /- \[ \] smör/);
+  await r.dodo.left(r.list);
+  assert.deepEqual(r.dodo.whatsNew(r.list), []);
+  assert.equal((await r.dodo.lists()).find(l => l.id === r.list)!.changed, false, 'seen on the server too');
+});
+
+test('a list seen somewhere else (the web, another computer) loses its dot here', async () => {
+  const r = await mk(); await seed(r); await r.dodo.enable(r.list);
+  await r.todo(r.id('tttt4'), 'ost', { h: r.id('hhhh1'), pos: 4 });
+  await r.dodo.tick();
+  assert.deepEqual(r.dodo.updated(), [r.list]);
+  await fetch(`${srv.url}/api/l/${r.list}/seen`, { method: 'POST', headers: { authorization: 'Bearer ' + ses.boss, 'content-type': 'application/json' }, body: '{}' });
+  r.dodo.listCheckEvery = 0;
+  await r.dodo.tick();
+  assert.deepEqual(r.dodo.updated(), []);
 });
 
 test('an unchanged note sends nothing, also after blank lines and repeated polling', async () => {

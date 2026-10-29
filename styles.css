@@ -14,3 +14,10 @@
 .dodo-form textarea { width: 100%; resize: vertical; }
 .dodo-row { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
 .dodo-new { position: sticky; bottom: 0; background: var(--background-primary); padding-top: 6px; }
+.dodo-news-line { box-shadow: inset 3px 0 0 var(--interactive-accent); background: color-mix(in srgb, var(--interactive-accent) 8%, transparent); }
+.dodo-news { border-bottom: 1px solid var(--background-modifier-border); margin-bottom: 10px; padding-bottom: 6px; }
+.dodo-news-row { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; font-size: var(--font-ui-small); }
+.dodo-news-row > span:nth-child(2) { flex: 1; }
+.dodo-news-row button { background: none; box-shadow: none; padding: 0 4px; height: auto; color: var(--text-accent); font-size: var(--font-ui-smaller); }
+.dodo-link { cursor: pointer; }
+.dodo-link:hover { text-decoration: underline; }

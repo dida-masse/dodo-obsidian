@@ -1,4 +1,5 @@
-// A small "💬 n" at the end of each todo line that has comments: a CodeMirror decoration, never text in the file.
+// A small "💬 n" at the end of each todo line that has comments, and a bar along the lines others changed since I last looked:
+// CodeMirror decorations, never text in the file.
 // The line -> todo map comes from the sync core (docPlan against the last server version). While typing, the markers
 // follow their lines through the changes and are recomputed 300 ms after the last keystroke.
 import { StateEffect, StateField, RangeSetBuilder, type Extension } from '@codemirror/state';
@@ -7,6 +8,7 @@ import { editorInfoField, type TFile } from 'obsidian';
 
 export interface MarkHost {
   marks(file: TFile, text: string): { line: number; id: string; n: number; fresh: boolean }[];
+  news(file: TFile, text: string): number[];
   open(file: TFile, todo: string): void;
   moved(file: TFile, text: string, line: number): void;
 }
@@ -51,11 +53,12 @@ export function marksExtension(h: MarkHost): Extension {
     private compute() {
       const file = this.file();
       if (!file || !this.view.dom.isConnected) return;
-      const doc = this.view.state.doc, b = new RangeSetBuilder<Decoration>();
-      for (const m of h.marks(file, doc.toString())) {
-        if (m.line >= doc.lines) continue;
-        b.add(doc.line(m.line + 1).to, doc.line(m.line + 1).to, Decoration.widget({ widget: new Mark(m.n, m.fresh, m.id, id => h.open(file, id)), side: 1 }));
-      }
+      const doc = this.view.state.doc, b = new RangeSetBuilder<Decoration>(), text = doc.toString();
+      // the builder wants them in order: a line's bar at its start, before a marker at its end
+      const all: [number, number, Decoration][] = [];
+      for (const n of h.news(file, text)) if (n < doc.lines) all.push([doc.line(n + 1).from, 0, Decoration.line({ class: 'dodo-news-line' })]);
+      for (const m of h.marks(file, text)) if (m.line < doc.lines) all.push([doc.line(m.line + 1).to, 1, Decoration.widget({ widget: new Mark(m.n, m.fresh, m.id, id => h.open(file, id)), side: 1 })]);
+      for (const [at, , d] of all.sort((a, b) => a[0] - b[0] || a[1] - b[1])) b.add(at, at, d);
       this.view.dispatch({ effects: set.of(b.finish()) });
     }
     private cursor() {

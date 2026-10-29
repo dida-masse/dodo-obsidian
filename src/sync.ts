@@ -23,6 +23,8 @@ export interface Host {
   notice(text: string, action?: { label: string; run: () => void }): void;
   confirm(text: string): Promise<boolean>;
 }
+// one line of "new since last time" from the server (GET /news): a todo added, changed, done or deleted, or someone who came or went
+export interface News { kind: string; by: string; at: string; todo?: string; text?: string; md?: boolean; who?: string; data?: any }
 export interface Snap { me: string; users: any[]; headings: any[]; todos: any[]; comments?: any[] }
 export interface ListData { name: string; rev: number; text: string; snap: Snap; hide: boolean; off?: boolean; lost?: boolean }
 export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; seen: Record<string, string>; since: string; lists: Record<string, ListData>; fresh: Record<string, number> }
@@ -93,6 +95,9 @@ export class Dodo {
   authLost = false;
   onStatus: () => void = () => {};
   onFresh: () => void = () => {}; // which notes have news from others changed: the status bar and the file list show it
+  onNews: (listId: string) => void = () => {}; // what is new in an opened note arrived, or was cleared
+  private newsOf: Record<string, News[]> = {};
+  private owed = new Set<string>(); // others changed it while it was in front of me: the server hears it was seen when I leave
   onLists: () => void = () => {}; // a list was turned on or lost: the settings tab shows it
   private md: Md;
   private users: any[] = [];
@@ -136,7 +141,7 @@ export class Dodo {
     Object.assign(this.data, { session: '', name: '' });
     await this.d.save();
   }
-  async lists(): Promise<{ id: string; name: string }[]> { return (await this.call('GET', '/api/lists')).lists; }
+  async lists(): Promise<{ id: string; name: string; changed?: boolean }[]> { return (await this.call('GET', '/api/lists')).lists; }
 
   // ---- the state of a list, and its text ----
   // null = nothing changed since `rev`
@@ -187,8 +192,39 @@ export class Dodo {
     ld.name = name;
     await this.d.save();
   }
-  // the note was opened: its news from others are seen
-  opened(id: string) { if (this.data.fresh[id]) { delete this.data.fresh[id]; void this.d.save(); this.onFresh(); } }
+  // the note was opened: what others did since I last looked is fetched (like the web's "new since last time"), and it counts as seen everywhere
+  async opened(id: string) {
+    if (!this.data.fresh[id] || !this.data.lists[id]) return;
+    delete this.data.fresh[id]; void this.d.save(); this.onFresh();
+    try {
+      const { previous } = await this.call('POST', `/api/l/${id}/seen`, {});
+      if (!previous) return;
+      const d = await this.call('GET', `/api/l/${id}/news?since=${encodeURIComponent(previous)}`);
+      if (d?.items?.length) { this.newsOf[id] = d.items; this.onNews(id); }
+    } catch { /* offline: the dot is gone, only the details are missed */ }
+  }
+  // the note was left: what was new in it is no longer marked, and changes that came while it was open count as seen
+  async left(id: string) {
+    if (this.newsOf[id]) { delete this.newsOf[id]; this.onNews(id); }
+    if (this.owed.delete(id)) await this.call('POST', `/api/l/${id}/seen`, {}).catch(() => {});
+  }
+  whatsNew(id: string): News[] { return this.newsOf[id] || []; }
+  // where a todo is in the note (0-based line in the whole file), or -1
+  lineOf(id: string, file: string, todo: string) {
+    const p = this.plan(id, file), i = p ? p.plan.findIndex(it => !it.level && it.id === todo) : -1;
+    return p && i >= 0 ? p.starts[i] + p.off : -1;
+  }
+  // the lines of the note whose todos are in its news (added, changed or done; a deleted one has no line)
+  newsLines(id: string, file: string): number[] {
+    const p = this.plan(id, file), ids = new Set(this.whatsNew(id).filter(x => x.kind !== 'delete').map(x => x.todo));
+    if (!p || !ids.size) return [];
+    return p.plan.flatMap((it, i) => !it.level && it.id && ids.has(it.id) ? [p.starts[i] + p.off] : []);
+  }
+  // a todo someone deleted comes back as it was
+  async restore(id: string, x: News) {
+    await this.call('PUT', `/api/l/${id}/todos/${encodeURIComponent(x.todo!)}`, x.data);
+    await this.flush(id);
+  }
   updated() { return Object.keys(this.data.fresh).filter(id => this.data.lists[id] && !this.data.lists[id].lost).sort((a, b) => this.data.fresh[b] - this.data.fresh[a]); }
   async disable(id: string) { if (this.data.lists[id]) { this.data.lists[id].off = true; await this.d.save(); } }
 
@@ -213,7 +249,15 @@ export class Dodo {
     try {
       for (const l of await this.lists()) {
         const ld = this.data.lists[l.id];
-        if (ld) { if (l.name !== ld.name) await this.renamed(l.id, ld, l.name); continue; }
+        if (ld) {
+          if (l.name !== ld.name) await this.renamed(l.id, ld, l.name);
+          // the server knows what I have seen anywhere (the web, another computer): its word wins, except for the note in front of me
+          if ('changed' in l && !ld.off && !this.d.host.viewing?.(l.id) && !!l.changed !== !!this.data.fresh[l.id]) {
+            if (l.changed) this.data.fresh[l.id] = Date.now(); else delete this.data.fresh[l.id];
+            await this.d.save(); this.onFresh();
+          }
+          continue;
+        }
         if (!this.data.autoAdd || this.adding.has(l.id)) continue;
         this.adding.add(l.id);
         try { await this.enable(l.id); this.onLists(); } finally { this.adding.delete(l.id); }
@@ -256,7 +300,8 @@ export class Dodo {
     if (squash(text) === squash(c)) ld.text = text;
     else if (await note.replace(file, toFile(head, c))) { ld.text = c; wrote = ld.hide === hide; } // not when it was only done todos shown or hidden
     else return;
-    if (wrote && !this.d.host.viewing?.(id)) { this.data.fresh[id] = Date.now(); this.onFresh(); } // my own edits never come back this way: what I sent already matches
+    if (wrote && this.d.host.viewing?.(id)) this.owed.add(id);
+    else if (wrote) { this.data.fresh[id] = Date.now(); this.onFresh(); } // my own edits never come back this way: what I sent already matches
     this.news(ld.snap, S);
     Object.assign(ld, { rev: S.rev, snap: this.snap(S), hide });
     await this.d.save();

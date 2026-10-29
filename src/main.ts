@@ -1,6 +1,6 @@
 // The Obsidian side: vault, editor, settings and timers around the sync core (sync.ts).
 import { FuzzySuggestModal, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, normalizePath, requestUrl, type Editor, type MarkdownFileInfo } from 'obsidian';
-import { CommentsView, VIEW } from './panel.js';
+import { CommentsView, newsLine, VIEW } from './panel.js';
 import { marksExtension, refreshMarks } from './marks.js';
 import { nodeStream, type Stream } from './events.js';
 import { Dodo, emptyData, freeName, listIdOf, minimalChange, SEND_MS, type Data, type Host, type Http, type Note } from './sync.js';
@@ -63,10 +63,20 @@ export default class DodoPlugin extends Plugin implements Host {
     this.dodo.onStatus = () => this.paint();
     this.dodo.onFresh = () => { this.paint(); this.paintDots(); };
     this.dodo.onSnap = () => { this.panels().forEach(p => p.refresh()); refreshMarks(); };
-    this.registerView(VIEW, leaf => new CommentsView(leaf, this.dodo));
+    this.registerView(VIEW, leaf => new CommentsView(leaf, this.dodo, { active: () => { const f = this.app.workspace.getActiveFile(), id = f && this.idOf(f); return id && this.data.lists[id] ? id : null; }, reveal: (l, t) => this.reveal(l, t) }));
+    this.dodo.onNews = id => {
+      refreshMarks(); this.panels().forEach(p => p.refresh());
+      const news = this.dodo.whatsNew(id);
+      if (!news.length || this.panels().length) return; // an open panel shows it
+      const f = document.createDocumentFragment(), more = news.length > 3 ? ` · +${news.length - 3}` : '';
+      f.createSpan({ text: 'Nytt sedan sist: ' + news.slice(-3).reverse().map(x => newsLine(this.dodo, id, x)).join(' · ') + more + ' ' });
+      f.createEl('button', { text: 'Visa' }).onclick = () => void this.showPanel();
+      new Notice(f, 10000);
+    };
     this.addCommand({ id: 'show-comments', name: 'Visa kommentarer', callback: () => void this.showPanel() });
     this.addRibbonIcon('message-square', 'dodo: Visa kommentarer', () => void this.showPanel());
     this.registerEditorExtension(marksExtension({
+      news: (file, text) => { const id = this.idOf(file); return id && this.data.lists[id] ? this.dodo.newsLines(id, text) : []; },
       marks: (file, text) => { const id = this.idOf(file); return id && this.data.lists[id] ? this.dodo.commentLines(id, text) : []; },
       open: (file, todo) => { const id = this.idOf(file); if (id) void this.showPanel().then(() => this.panels().forEach(p => p.show(id, todo))); },
       moved: (file, text, line) => this.cursorAt(file, text, line),
@@ -83,7 +93,7 @@ export default class DodoPlugin extends Plugin implements Host {
     this.registerEvent(this.app.vault.on('delete', f => { for (const [id, t] of this.pinned) if (t === f) this.pinned.delete(id); }));
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => { // leaving a note sends it at once
       const prev = this.last, now = this.app.workspace.getActiveFile();
-      if (prev && prev !== now) { const id = this.idOf(prev); if (id) void this.dodo.flush(id); }
+      if (prev && prev !== now) { const id = this.idOf(prev); if (id) { void this.dodo.flush(id); void this.dodo.left(id); } }
       this.last = now;
       this.openedActive();
       this.syncPanel();
@@ -181,7 +191,15 @@ export default class DodoPlugin extends Plugin implements Host {
   }
 
   // the note in front of the user has been seen
-  private openedActive() { const f = this.app.workspace.getActiveFile(), id = f && this.idOf(f); if (id) this.dodo.opened(id); }
+  private openedActive() { const f = this.app.workspace.getActiveFile(), id = f && this.idOf(f); if (id) void this.dodo.opened(id); }
+  // a todo from the news: the caret goes to its line in the note
+  private reveal(list: string, todo: string) {
+    const v = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!v?.file || this.idOf(v.file) !== list) return;
+    const line = this.dodo.lineOf(list, v.editor.getValue(), todo);
+    if (line < 0) return;
+    v.editor.setCursor({ line, ch: 0 }); v.editor.scrollIntoView({ from: { line, ch: 0 }, to: { line, ch: 0 } }, true); v.editor.focus();
+  }
   // a dot after the names of notes others have changed, in the file list. One style sheet by path: it survives the list being redrawn,
   // and if Obsidian renames its classes the dots just stop showing
   private paintDots() {
