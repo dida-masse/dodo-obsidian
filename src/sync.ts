@@ -199,6 +199,9 @@ export class Dodo {
     const now = fileName(ld.name);
     if (base === now || base.replace(/ \d+$/, '') === now) return; // our own rename, or »Namn 2« made because the name was taken
     try {
+      // with a shared vault the other computer's rename (following dodo) arrives as a rename here too: the server already has that name
+      const there = (await this.lists()).find(l => l.id === id)?.name;
+      if (there != null && (fileName(there) === base || base.replace(/ \d+$/, '') === fileName(there))) { ld.name = there; await this.d.save(); return; }
       await this.call('PUT', `/api/l/${id}`, { name: base });
       ld.name = base; await this.d.save();
     } catch (e: any) {

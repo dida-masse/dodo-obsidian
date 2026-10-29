@@ -125,6 +125,22 @@ test('renaming the note in Obsidian renames the list for its admin; a plain memb
   assert.deepEqual([...av.files.keys()], ['dodo/Annas namn.md']);
 });
 
+test('a shared vault: the rename from the other computer that followed dodo sends nothing and tells a plain member nothing', async () => {
+  const r = await mk('Delad'); await seed(r);
+  const ad = emptyData(); // anna on the second computer, same vault, not the list's admin
+  Object.assign(ad, { url: srv.url, session: ses.anna, name: 'Anna', autoAdd: false });
+  const alog: any[] = [], anna = new Dodo(ad, { http: fetchHttp(alog), host: r.vault, save: () => {}, openSettings: () => {} });
+  await r.dodo.enable(r.list); await anna.enable(r.list);
+  r.dodo.listCheckEvery = 0;
+  await fetch(`${srv.url}/api/l/${r.list}`, { method: 'PUT', headers: { authorization: 'Bearer ' + ses.boss, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Nytt: namn' }) });
+  await r.dodo.tick(); // the first computer renames the file; it arrives at the second as a rename of the note
+  await anna.noteRenamed(r.list);
+  assert.deepEqual([...r.vault.files.keys()], ['dodo/Nytt namn.md']);
+  assert.deepEqual(writes(alog), []);
+  assert.deepEqual(r.vault.notices, []);
+  assert.equal(ad.lists[r.list].name, 'Nytt: namn');
+});
+
 test('a note changed by someone else is marked until it is opened; my own edits, hiding done todos and an open note are not', async () => {
   const r = await mk(); await seed(r); await r.dodo.enable(r.list);
   await (r.dodo as any).call('POST', `/api/l/${r.list}/seen`, {}); await sleep(5); // a start where everything is seen
