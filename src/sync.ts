@@ -16,6 +16,8 @@ export interface Host {
   note(listId: string): Note | null;
   exists(path: string): boolean;
   move(listId: string, dir: string): Promise<void>; // the note goes into `dir` under a free name; links follow
+  rename(listId: string, stem: string): Promise<void>; // the note gets a new free name in its folder; links follow
+  base(listId: string): string | null; // the note's file name without .md
   create(path: string, text: string): Promise<Note>;
   notice(text: string, action?: { label: string; run: () => void }): void;
   confirm(text: string): Promise<boolean>;
@@ -175,6 +177,14 @@ export class Dodo {
     this.data.lists[id] = { name: S.list.name, rev: S.rev, text, snap: this.snap(S), hide };
     await this.d.save();
   }
+  // the list got a new name in dodo: the note follows, unless it was given a name of its own in Obsidian
+  private async renamed(id: string, ld: ListData, name: string) {
+    const base = this.d.host.base(id);
+    const was = fileName(ld.name);
+    if (base === was || base?.replace(/ \d+$/, '') === was) await this.d.host.rename(id, fileName(name)); // or »Handla 2« when the name was taken
+    ld.name = name;
+    await this.d.save();
+  }
   async disable(id: string) { if (this.data.lists[id]) { this.data.lists[id].off = true; await this.d.save(); } }
 
   // ---- when to sync ----
@@ -191,13 +201,15 @@ export class Dodo {
     if (name === 'rev' && d?.list && this.data.lists[d.list]) void this.cycle(d.list, false).then(() => this.flushNews());
     else if (name === 'lists') { void this.addNew(true); for (const id of Object.keys(this.data.lists)) void this.cycle(id, false); } // a deleted list is noticed at once
   }
-  // lists the server has that the vault has never seen are turned on; a list switched off stays off
+  // lists the server has that the vault has never seen are turned on; a list switched off stays off; a renamed list renames its note
   private async addNew(force: boolean) {
-    if (!this.data.autoAdd || !this.data.session || this.authLost || (!force && Date.now() - this.listCheck < this.listCheckEvery)) return;
+    if (!this.data.session || this.authLost || (!force && Date.now() - this.listCheck < this.listCheckEvery)) return;
     this.listCheck = Date.now();
     try {
       for (const l of await this.lists()) {
-        if (this.data.lists[l.id] || this.adding.has(l.id)) continue;
+        const ld = this.data.lists[l.id];
+        if (ld) { if (l.name !== ld.name) await this.renamed(l.id, ld, l.name); continue; }
+        if (!this.data.autoAdd || this.adding.has(l.id)) continue;
         this.adding.add(l.id);
         try { await this.enable(l.id); this.onLists(); } finally { this.adding.delete(l.id); }
       }

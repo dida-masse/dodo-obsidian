@@ -64,6 +64,12 @@ export class FakeVault implements Host {
     const to = freeName(dir, stem, p => this.exists(p)).path;
     this.files.set(to, this.files.get(from)!); this.files.delete(from);
   }
+  async rename(id: string, stem: string) {
+    const from = this.path(id)!, dir = from.split('/').slice(0, -1).join('/');
+    const to = freeName(dir, stem, p => p !== from && this.exists(p)).path;
+    const t = this.files.get(from)!; this.files.delete(from); this.files.set(to, t);
+  }
+  base(id: string) { const p = this.path(id); return p ? p.split('/').pop()!.replace(/\.md$/, '') : null; }
   exists(p: string) { return this.files.has(p); }
   async create(p: string, text: string) { this.files.set(p, text); return this.note(listIdOf(text.match(/dodo:\s*(\S+)/)![1])!)!; }
   notice(text: string, action?: any) { this.notices.push({ text, action }); }

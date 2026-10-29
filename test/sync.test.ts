@@ -77,6 +77,22 @@ test('an edit synced in from the other computer, already sent from there, is not
   assert.equal((await state(r)).todos.filter((t: any) => t.text === 'ägg').length, 1);
 });
 
+test('a list renamed in dodo renames its note; a note given its own name in Obsidian keeps it', async () => {
+  const r = await mk('Gammal'); await seed(r); await r.dodo.enable(r.list);
+  const put = (name: string) => fetch(`${srv.url}/api/l/${r.list}`, { method: 'PUT', headers: { authorization: 'Bearer ' + ses.boss, 'content-type': 'application/json' }, body: JSON.stringify({ name }) });
+  r.dodo.listCheckEvery = 0;
+  await put('Ny: lista');
+  await r.dodo.tick();
+  assert.deepEqual([...r.vault.files.keys()], ['dodo/Ny lista.md']);
+  assert.equal(body(r), '## Inköp\n- [ ] mjölk #mat\n- [ ] bröd !hög\n- [ ] smör');
+  assert.deepEqual(writes(r.log).filter(l => l.method !== 'PUT' || !l.path.endsWith(r.list)), []);
+  await r.vault.rename(r.list, 'Mitt eget namn');
+  await put('Tredje');
+  await r.dodo.tick();
+  assert.deepEqual([...r.vault.files.keys()], ['dodo/Mitt eget namn.md']);
+  assert.equal(r.data.lists[r.list].name, 'Tredje');
+});
+
 test('an unchanged note sends nothing, also after blank lines and repeated polling', async () => {
   const r = await mk(); await seed(r); await r.dodo.enable(r.list);
   r.log.length = 0;

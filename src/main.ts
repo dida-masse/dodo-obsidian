@@ -201,6 +201,13 @@ export default class DodoPlugin extends Plugin implements Host {
     if (!this.app.vault.getAbstractFileByPath(dir)) await this.app.vault.createFolder(dir).catch(() => {});
     await this.app.fileManager.renameFile(file, normalizePath(freeName(dir, file.basename, p => this.exists(p)).path)); // links follow
   }
+  async rename(id: string, stem: string) {
+    const file = this.fileFor(id);
+    if (!file) return;
+    const dir = file.parent && !file.parent.isRoot() ? file.parent.path : '', self = file.path.toLowerCase();
+    await this.app.fileManager.renameFile(file, normalizePath(freeName(dir, stem, p => p.toLowerCase() !== self && this.exists(p)).path)); // links follow
+  }
+  base(id: string) { return this.fileFor(id)?.basename ?? null; }
   exists(path: string) { const l = path.toLowerCase(); return this.app.vault.getAllLoadedFiles().some(f => f.path.toLowerCase() === l); }
   async create(path: string, text: string) {
     path = normalizePath(path);
