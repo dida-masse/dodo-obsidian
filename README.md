@@ -34,10 +34,6 @@ Kommentarer skrivs aldrig in i anteckningen, och inte heller vem som bockade av 
 
 Kommandot *dodo: Visa kommentarer* (eller ikonen i vänsterkanten) öppnar en sidopanel med kommentarerna på uppgiften där markören står: författare, tid och text (markdown), svar indragna under tråden, lösta trådar ihopvikta. Längst ner skriver du en ny kommentar (Ctrl/Cmd+Enter skickar), och *Svara* finns på varje kommentar. Rader med kommentarer får en liten *💬 n* sist på raden (bara en markering i editorn, inte text i filen); den är färgad när någon annan har skrivit något du inte har sett, och ett klick öppnar panelen. När någon annan kommenterar får du en notis. En rad du precis har skrivit och som inte är skickad än har inga kommentarer.
 
-## Nästa steg
-
-Stöd för Tasks-pluginet (Tasks format för datum och prioritet, avbockning i Tasks-frågor) kommer i nästa steg.
-
 ## Utveckling
 
 `npm run md` kopierar reglerna för texten från `../dodo/public/md.js` (till `src/md.js`, som är incheckad). `npm run build` bygger `main.js`. `npm test` startar en riktig dodo-server från `../dodo` i en tillfällig mapp och provar synken mot den (Node 22+).
