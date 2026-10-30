@@ -115,7 +115,7 @@ export default class DodoPlugin extends Plugin implements Host {
     const load = (window as unknown as { require?: (m: string) => unknown }).require;
     if (!Platform.isDesktopApp || !load || !this.data.session) return;
     const open: Stream = nodeStream(load);
-    this.stream = open({ url: this.data.url, session: this.data.session,
+    this.stream = open({ url: this.data.url, session: this.data.session, version: this.manifest.version,
       onState: up => { this.up = up; if (up) void this.tick(); }, // after a drop or a wake-up: catch up at once
       onEvent: (name, d) => this.dodo.event(name, d) });
   }
