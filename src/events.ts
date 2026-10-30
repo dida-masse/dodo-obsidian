@@ -1,6 +1,6 @@
 // The server's event stream (GET /api/events: "rev" {list, by} when a list changes, "lists" when membership changes, "ping" every 25 s).
 // requestUrl cannot stream, so this uses Node's http/https; `load` hands them over (Obsidian desktop: window.require, tests: createRequire).
-export interface StreamOpts { url: string; session: string; onEvent(name: string, data: any): void; onState(up: boolean): void }
+export interface StreamOpts { url: string; session: string; version: string; onEvent(name: string, data: any): void; onState(up: boolean): void }
 export type Stream = (o: StreamOpts) => { close(): void };
 
 const SILENT_MS = 70e3; // the server pings every 25 s; quiet for longer means a dead socket (a laptop that slept)
@@ -20,7 +20,7 @@ export const nodeStream = (load: (m: string) => any, silentMs = SILENT_MS): Stre
     const mod = load(u.protocol === 'https:' ? 'https' : 'http');
     let buf = '', name = '', done = false;
     const drop = () => { if (!done) { done = true; again(); } }; // a socket can report its end several times ('end', 'error', the watchdog): reconnect once, or the streams multiply
-    req = mod.request(u, { headers: { authorization: 'Bearer ' + o.session, accept: 'text/event-stream' } }, (res: any) => {
+    req = mod.request(u, { headers: { authorization: 'Bearer ' + o.session, accept: 'text/event-stream', 'user-agent': 'dodo-obsidian/' + o.version } }, (res: any) => {
       if (res.statusCode !== 200) { res.resume(); return drop(); }
       delay = 1000; state(true);
       const watch = () => { clearTimeout(dog); dog = setTimeout(drop, silentMs); };
