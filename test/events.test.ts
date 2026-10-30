@@ -70,7 +70,7 @@ test('a dropped stream opens one new connection, not one per report of the drop 
   await sleep(4500);
   s.close();
   fake.closeAllConnections(); await new Promise(ok => fake.close(ok));
-  assert.ok(total <= 6, `${total} connections in 4.5 s`);
+  assert.ok(total <= 3, `${total} connections in 4.5 s`); // waits of 1 s and 2 s, then 4 s
 });
 
 test('the stream names the client and its version in user-agent', async () => {
