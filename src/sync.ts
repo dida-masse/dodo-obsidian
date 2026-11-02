@@ -20,8 +20,7 @@ export interface Host {
   base(listId: string): string | null; // the note's file name without .md
   viewing?(listId: string): boolean; // the note is in front of the user right now
   create(path: string, text: string): Promise<Note>;
-  notice(text: string, action?: { label: string; run: () => void }): void;
-  confirm(text: string): Promise<boolean>;
+  notice(text: string, ...actions: { label: string; run: () => void }[]): void;
 }
 // one line of "new since last time" from the server (GET /news): a todo added, changed, done or deleted, or someone who came or went
 export interface News { kind: string; by: string; at: string; todo?: string; text?: string; md?: boolean; who?: string; data?: any }
@@ -35,6 +34,8 @@ export const LOST_TITLE = '> [!warning] Listan finns inte längre i dodo';
 export const lostNote = (name: string, day: string) => `${LOST_TITLE}\n> »${name}« är borttagen i dodo, eller så är du inte med i den längre (${day}). Anteckningen hålls inte i takt längre, men texten finns kvar här.`;
 export const ASIDE = 'Borttagna';
 export const SEND_MS = 1000; // quiet after typing before it is sent
+// a note whose changes would delete this many of the list's todos is held back: more likely a misread note (a ~~~ in a mail signature once swallowed 62 todos) than a cleanup
+export const massDelete = (gone: number, total: number) => gone >= 10 || (gone >= 3 && gone * 2 > total);
 // the first free `dir/stem.md`, `dir/stem 2.md` …; n > 1 means the first was taken
 export function freeName(dir: string, stem: string, exists: (p: string) => boolean) {
   let n = 1, path = '';
@@ -105,6 +106,8 @@ export class Dodo {
   private errs = new Map<string, string>();
   private locks = new Map<string, Promise<unknown>>();
   private edited = new Map<string, number>();
+  held = new Map<string, string>(); // list id -> why its note is not sent: a mass deletion waits for the user
+  private allow = new Set<string>(); // the user said send it anyway: the next push may delete
 
   constructor(public data: Data, private d: { http: Http; host: Host; save: () => unknown; openSettings?: () => void }) {
     this.md = loadMd(this.users, uid, 'sv');
@@ -287,10 +290,21 @@ export class Dodo {
   }
   flush(id: string) { return this.cycle(id, true).then(() => this.flushNews()); }
 
-  private cycle(id: string, now: boolean): Promise<void> {
-    const p = (this.locks.get(id) ?? Promise.resolve()).then(() => this.run(id, now));
+  private cycle(id: string, now: boolean) { return this.locked(id, () => this.run(id, now)); }
+  private locked(id: string, f: () => Promise<void>): Promise<void> {
+    const p = (this.locks.get(id) ?? Promise.resolve()).then(f).catch(() => {}); // a failure never blocks the next one in line
     this.locks.set(id, p);
     return p;
+  }
+  // the user's answer to a held mass deletion: send the note after all, or put back what dodo has (the edit is lost)
+  async release(id: string, send: boolean) {
+    if (!this.held.delete(id)) return;
+    if (send) this.allow.add(id);
+    else await this.locked(id, async () => {
+      const ld = this.data.lists[id], note = this.d.host.note(id), file = await note?.read();
+      if (ld && note && file != null) await note.replace(file, toFile(split(file).head, ld.text)); // the last synced text: the pull then brings dodo's newest
+    });
+    await this.flush(id);
   }
   private async run(id: string, now: boolean) {
     const ld = this.data.lists[id], note = ld && this.d.host.note(id);
@@ -298,7 +312,7 @@ export class Dodo {
     this.busy++; this.update();
     try {
       const { text } = split(await note.read());
-      if (text === ld.text) await this.pull(id, ld, note);
+      if (text === ld.text) { this.held.delete(id); await this.pull(id, ld, note); }
       else if (now || Date.now() - (this.edited.get(id) || 0) >= SEND_MS) await this.push(id, ld, note); // still typing: the debounce sends it
       this.errs.delete(id);
     } catch (e: any) { await this.fail(id, ld, note, e); }
@@ -338,11 +352,15 @@ export class Dodo {
     const plan = md.docPlan(items, text), at = new Map(items.map(x => [x.id, x.at])), inDoc = new Set(items.map(x => x.id));
 
     const kept = new Set(plan.filter(p => p.id).map(p => p.id)), todos = items.filter(i => !i.heading && !i.block);
-    const gone = todos.filter(i => !kept.has(i.id)).length;
-    if (gone >= 2 && gone * 2 > todos.length && !await this.d.host.confirm(`Ta bort ${gone} av ${todos.length} uppgifter i dodo? De går att ångra där.`)) {
-      await note.replace(file, toFile(head, ld.text)); // "keep": the note goes back to what dodo has
-      return;
+    const gone = todos.filter(i => !kept.has(i.id)).length, ok = this.allow.delete(id);
+    // nothing of the note is sent, not even its other edits: they are part of the same reading (the swallowed todos became one todo's note)
+    if (massDelete(gone, todos.length) && !ok) {
+      const why = `»${ld.name}«: ${gone} av ${todos.length} uppgifter skulle tas bort i dodo, så inget av anteckningen är skickat. Kör »dodo: Spara borttagningen ändå« om det är meningen, eller »dodo: Hämta listan från dodo igen«.`;
+      if (!this.held.has(id)) this.d.host.notice('dodo: ' + why, { label: 'Ta bort ändå', run: () => void this.release(id, true) }, { label: 'Hämta från dodo', run: () => void this.release(id, false) });
+      this.held.set(id, why);
+      throw new Fail(why); // the status bar shows it until it is answered; once told, the next polls say nothing
     }
+    this.held.delete(id);
 
     const byId = (i: string) => S.todos.find(t => t.id === i);
     const baseJ = new Map(S.todos.map(t => [t.id, JSON.stringify(t)])), baseH = JSON.stringify(S.headings);
@@ -495,7 +513,7 @@ export class Dodo {
     if (e.status === 401) {
       this.authLost = true;
       this.errs.set(id, 'Sessionen har stängts av. Logga in igen.');
-      this.d.host.notice('dodo: du är utloggad. Det du skriver sparas i anteckningen och skickas efter inloggningen.', this.d.openSettings && { label: 'Logga in igen', run: this.d.openSettings });
+      this.d.host.notice('dodo: du är utloggad. Det du skriver sparas i anteckningen och skickas efter inloggningen.', ...this.d.openSettings ? [{ label: 'Logga in igen', run: this.d.openSettings }] : []);
     } else if (e.lost && ld && note) {
       ld.lost = true; this.errs.delete(id);
       const file = await note.read().catch(() => '');
