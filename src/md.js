@@ -169,6 +169,13 @@ function docPlan(items, text) {
   }
   return b;
 }
+// How many todos (text blocks too) saving the plan deletes, or 0 when that few is an ordinary edit. Many at once is more likely a mistake,
+// such as a ``` that swallowed the rest of the list into one note, so the editor asks first: at least 10, or 3 and more than half the list
+function docLoss(items, plan) {
+  const kept = new Set(plan.filter(p => p.level || p.block || parseLine(p.lines[0]).text).map(p => p.id)), todos = items.filter(x => !x.heading);
+  const n = todos.filter(x => !kept.has(x.id)).length;
+  return n >= 10 || n >= 3 && n * 2 > todos.length ? n : 0;
+}
 // Rules: a bullet starts a todo; lines under it are its notes; nested bullets are subtasks; # lines are headings.
 // Text that belongs to no bullet becomes a todo of its own and is reported, so nothing disappears unnoticed.
 const BULLET = /^(\s*)(?:[-*+•]|\d+[.)])\s+(?:\[([ xX])\]\s*)?(.*)$/;
