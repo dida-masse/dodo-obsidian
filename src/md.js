@@ -69,8 +69,8 @@ function parseBlock(lines) {
   const sub = rest.map(l => { const was = inFence; if (FENCE.test(l)) inFence = !inFence; return !was && !inFence && TASK.test(l); });
   const subs = rest.filter((l, i) => sub[i]).map(l => ({ id: uid(), ...parseLine(l) })).filter(s => s.text);
   const first = parseLine(lines[0]), notes = rest.filter((l, i) => !sub[i]).join('\n').trim();
-  // @name in the notes assigns too; the mention stays in the text where it was written
-  return { ...first, who: [...new Set([...first.who, ...mentions(notes)])], subs, notes };
+  // @name in the notes only mentions; the people on the first line are the ones the todo is for
+  return { ...first, subs, notes };
 }
 // Markdown, as in Obsidian (#35): "# Rubrik" is a heading and a task-list item ("- [ ]", "- [x]") starts a todo; a plain bullet is ordinary
 // text. Indented lines, and plain text right after a todo with no blank line between, belong to that todo (so a "---" there is a note too);
@@ -110,10 +110,11 @@ function line(x, tasks) {
   return [`- [${x.done ? 'x' : ' '}]`, x.text, ...(x.tags || []).map(g => '#' + g), ...(x.who || []).map(w => '@' + handle(w)), ...extra].filter(Boolean).join(' ');
 }
 function serialize(t, tasks) {
-  const notes = t.notes && t.notes.split('\n').map(l => '  ' + l).join('\n'), inNotes = mentions(t.notes);
-  // people mentioned in the notes are not repeated on the first line, so deleting the mention there unassigns them
-  return [line({ ...t, who: t.who.filter(w => !inNotes.includes(w)) }, tasks), ...t.subs.map(s => '  ' + line(s, tasks)), notes].filter(Boolean).join('\n');
+  const notes = t.notes && t.notes.split('\n').map(l => '  ' + l).join('\n');
+  return [line(t, tasks), ...t.subs.map(s => '  ' + line(s, tasks)), notes].filter(Boolean).join('\n');
 }
+// Enkel's editor hides the "- [ ] " in front of the first line; rebox puts it back as it was (done or not) unless the person typed a box
+const unbox = s => s.replace(/^- \[[ xX]\] /, ''), rebox = (s, was) => TASK.test(s) ? s : was + s;
 // "DA101 @erik @sara" -> { title: 'DA101', who: [erikId, saraId] }
 function parseHeading(s) {
   const who = [];
@@ -189,7 +190,7 @@ function normalize(text) {
 function parseImport(md) {
   return splitDoc(md).map(it => {
     if (it.level) return { heading: { id: uid(), level: it.level, ...parseHeading(it.title), notes: it.notes } };
-    if (it.block) return { todo: { md: true, text: '', notes: it.notes, tags: [], who: mentions(it.notes), subs: [], due: null, prio: 0, done: false } };
+    if (it.block) return { todo: { md: true, text: '', notes: it.notes, tags: [], who: [], subs: [], due: null, prio: 0, done: false } };
     const t = parseBlock(it.lines);
     if (t.done) t.subs.forEach(s => s.done = true); // as in the app: a finished todo has finished subtasks
     return { todo: t };
