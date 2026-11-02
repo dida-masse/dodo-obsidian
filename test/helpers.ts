@@ -49,9 +49,7 @@ export const writes = (log: Log) => log.filter(l => l.method !== 'GET');
 // a vault of files in a map; notes are found by their `dodo:` frontmatter, like main.ts does
 export class FakeVault implements Host {
   files = new Map<string, string>();
-  notices: { text: string; action?: any }[] = [];
-  answer = true;
-  asked: string[] = [];
+  notices: { text: string; action?: any; actions: any[] }[] = [];
   private path(id: string) { return [...this.files].find(([, t]) => listIdOf(t.match(/^---\n[\s\S]*?^dodo:\s*(\S+)/m)?.[1]) === id)?.[0]; }
   note(id: string): Note | null {
     const p = this.path(id);
@@ -74,8 +72,7 @@ export class FakeVault implements Host {
   viewing(id: string) { return this.looking.has(id); }
   exists(p: string) { return this.files.has(p); }
   async create(p: string, text: string) { this.files.set(p, text); return this.note(listIdOf(text.match(/dodo:\s*(\S+)/)![1])!)!; }
-  notice(text: string, action?: any) { this.notices.push({ text, action }); }
-  async confirm(text: string) { this.asked.push(text); return this.answer; }
+  notice(text: string, ...actions: any[]) { this.notices.push({ text, action: actions[0], actions }); }
 }
 
 export interface Rig { id: (s: string) => string; srv: Server; log: Log; vault: FakeVault; dodo: Dodo; data: Data; list: string; anna: (m: string, p: string, b?: any) => Promise<any>; todo: (id: string, text: string, extra?: any) => Promise<any> }

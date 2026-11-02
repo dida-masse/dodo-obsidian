@@ -19,7 +19,7 @@ Sessionen sparas bara i pluginets egna data (`data.json`), aldrig i anteckningar
 ## Så fungerar det
 
 - På datorn säger servern till direkt när något ändras (en ström som hålls öppen), och pluginet frågar bara var 30:e sekund som säkerhet. På mobilen, eller medan strömmen ligger nere, frågar det varannan sekund. Allt hämtas också när Obsidian startar eller får fokus. Medan du skriver väntar uppdateringen tills du har slutat skriva en stund; markören och scrollen står kvar.
-- Det du skriver skickas cirka 1 sekund efter att du slutat, och när du lämnar anteckningen. Bara det som har ändrats skickas, och en ändrad rad behåller sin uppgift. Tar du bort mer än hälften av uppgifterna på en gång frågar pluginet först.
+- Det du skriver skickas cirka 1 sekund efter att du slutat, och när du lämnar anteckningen. Bara det som har ändrats skickas, och en ändrad rad behåller sin uppgift. Skulle en ändring ta bort 10 uppgifter eller fler, eller minst 3 och mer än hälften av listan, skickas ingenting av anteckningen: den står kvar som den är, du får en notis och statusraden visar *dodo !* tills du har bestämt dig. *Ta bort ändå* (eller kommandot *dodo: Spara borttagningen ändå*) skickar den, *Hämta från dodo* (eller *dodo: Hämta listan från dodo igen*) skriver om anteckningen med det dodo har, och då försvinner ändringen. Ångrar du själv i anteckningen går den vidare som vanligt.
 - Har både du och någon annan ändrat samma uppgift står dodos version kvar, och din text läggs som en kommentar på uppgiften, med en notis.
 - Offline sparas allt i anteckningen och skickas när nätet är tillbaka. Är du utloggad får du en notis med en knapp för att logga in igen. Försvinner du ur en lista får anteckningen en rad överst om det och hålls inte längre i takt; filen tas aldrig bort utan flyttas till `dodo/Borttagna/` (länkar följer med).
 - Statusraden (dator) visar *dodo ✓*, *dodo …* eller *dodo !*; ett klick visar vad som gick fel.
@@ -36,4 +36,4 @@ Kommandot *dodo: Visa kommentarer* (eller ikonen i vänsterkanten) öppnar en si
 
 ## Utveckling
 
-`npm run md` kopierar reglerna för texten från `../dodo/public/md.js` (till `src/md.js`, som är incheckad). `npm run build` bygger `main.js`. `npm test` startar en riktig dodo-server från `../dodo` i en tillfällig mapp och provar synken mot den (Node 22+).
+`npm run md` kopierar reglerna för texten från `../dodo/public/md.js` (till `src/md.js`, som är incheckad). `npm run build` bygger `main.js`. `npm test` säger till om `src/md.js` inte längre är det `npm run md` gör av `../dodo/public/md.js` (finns inte dodo bredvid hoppas det över). Det startar också en riktig dodo-server från `../dodo` i en tillfällig mapp och provar synken mot den (Node 22+).

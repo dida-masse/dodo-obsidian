@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { Dodo, emptyData, LOST_TITLE, split } from '../src/sync.js';
+import { Dodo, emptyData, LOST_TITLE, massDelete, split } from '../src/sync.js';
 import { Server, login, rig, sleep, writes, fetchHttp, FakeVault, state, type Rig } from './helpers.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -296,25 +296,41 @@ test('offline: the note keeps the edit and it is delivered when the server is ba
   assert.ok((await state(r)).todos.some((t: any) => t.text === 'medan jag var offline'));
 });
 
-test('deleting more than half the todos asks first; keeping puts the note back', async () => {
+test('massDelete: 10 or more, or 3 or more and over half the list', () => {
+  for (const [gone, total, held] of [[10, 500, true], [9, 500, false], [3, 5, true], [3, 6, false], [2, 2, false], [2, 3, false], [62, 63, true], [0, 0, false]] as const)
+    assert.equal(massDelete(gone, total), held, `${gone} av ${total}`);
+});
+
+test('a mass deletion is held: nothing sent, the note kept, one notice; then sent anyway or dropped for dodo\'s version', async () => {
   const r = await mk(); await seed(r); await r.todo(r.id('tttt4'), 'ost', { h: r.id('hhhh1'), pos: 4 }); await r.dodo.enable(r.list);
-  const full = body(r);
-  r.vault.answer = false;
-  r.vault.edit(r.list, () => r.vault.file(r.list).replace(/- \[ \] (mjölk|bröd|smör).*\n/g, ''));
+  const full = body(r), cut = () => r.vault.edit(r.list, t => t.replace(/- \[ \] (mjölk|bröd|smör).*\n/g, '').replace('ost', 'ost och kex'));
+  cut(); const edited = body(r);
   r.log.length = 0;
-  await r.dodo.flush(r.list);
-  assert.equal(r.vault.asked.length, 1);
-  assert.deepEqual(writes(r.log), []);
+  await r.dodo.flush(r.list); await r.dodo.tick(); await r.dodo.flush(r.list);
+  assert.deepEqual(writes(r.log), [], 'not even the other edit');
+  assert.equal(body(r), edited);
+  assert.equal(r.vault.notices.length, 1, 'told once, not every poll');
+  assert.match(r.vault.notices[0].text, /3 av 4 uppgifter skulle tas bort/);
+  assert.deepEqual(r.vault.notices[0].actions.map((a: any) => a.label), ['Ta bort ändå', 'Hämta från dodo']);
+  assert.equal(r.dodo.status, 'err');
+  assert.ok(r.dodo.held.has(r.list));
+  await r.dodo.release(r.list, false); // dropped: dodo's version comes back
   assert.equal(body(r), full);
-  r.vault.answer = true;
-  r.vault.edit(r.list, () => r.vault.file(r.list).replace(/- \[ \] (mjölk|bröd|smör).*\n/g, ''));
+  assert.equal(r.dodo.status, 'ok');
+  assert.equal((await state(r)).todos.length, 4);
+  cut();
   await r.dodo.flush(r.list);
-  assert.equal(r.vault.asked.length, 2);
-  assert.deepEqual((await state(r)).todos.map((t: any) => t.text), ['ost']);
-  // one todo less is no question
-  r.vault.edit(r.list, t => t.replace('- [ ] ost', ''));
+  assert.equal(r.vault.notices.length, 2, 'a new hold is told again');
+  r.vault.notices[1].actions[0].run(); // "Ta bort ändå"
+  await r.dodo.flush(r.list); // after the one the button started
+  assert.deepEqual((await state(r)).todos.map((t: any) => t.text), ['ost och kex']);
+  assert.equal(r.dodo.held.size, 0);
+  assert.equal(r.dodo.status, 'ok');
+  // one todo less is no hold
+  r.vault.edit(r.list, t => t.replace('- [ ] ost och kex', ''));
   await r.dodo.flush(r.list);
-  assert.equal(r.vault.asked.length, 2);
+  assert.equal(r.vault.notices.length, 2);
+  assert.equal((await state(r)).todos.length, 0);
 });
 
 test('logged out: a notice with a button, the text stays and is sent after logging in again', async () => {

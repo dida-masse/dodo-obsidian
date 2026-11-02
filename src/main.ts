@@ -1,5 +1,5 @@
 // The Obsidian side: vault, editor, settings and timers around the sync core (sync.ts).
-import { FuzzySuggestModal, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, normalizePath, requestUrl, type Editor, type MarkdownFileInfo } from 'obsidian';
+import { FuzzySuggestModal, MarkdownView, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, normalizePath, requestUrl, type Editor, type MarkdownFileInfo } from 'obsidian';
 import { CommentsView, newsLine, VIEW } from './panel.js';
 import { marksExtension, refreshMarks } from './marks.js';
 import { nodeStream, type Stream } from './events.js';
@@ -19,20 +19,6 @@ const http: Http = async r => {
 export function patch(editor: Editor, from: string, to: string) {
   const c = minimalChange(from, to);
   editor.replaceRange(c.text, editor.offsetToPos(c.from), editor.offsetToPos(c.to));
-}
-
-class Confirm extends Modal {
-  private done = false;
-  constructor(app: Plugin['app'], private text: string, private resolve: (ok: boolean) => void) { super(app); }
-  onOpen() {
-    this.titleEl.setText('dodo');
-    this.contentEl.createEl('p', { text: this.text });
-    new Setting(this.contentEl)
-      .addButton(b => b.setButtonText('Ta bort').setWarning().onClick(() => this.finish(true)))
-      .addButton(b => b.setButtonText('Behåll').setCta().onClick(() => this.finish(false)));
-  }
-  onClose() { this.finish(false); }
-  private finish(ok: boolean) { if (this.done) return; this.done = true; this.resolve(ok); this.close(); }
 }
 
 class Pick extends FuzzySuggestModal<{ id: string; name: string }> {
@@ -85,6 +71,15 @@ export default class DodoPlugin extends Plugin implements Host {
     this.dodo.onLists = () => { if (tab.containerEl.isConnected) tab.display(); }; // an open settings tab is not left showing old toggles
     this.addSettingTab(tab);
     this.addCommand({ id: 'add-list', name: 'Lägg till lista', callback: () => this.addList() });
+    // a held mass deletion in the active note (sync.ts, massDelete): the commands only show while there is one
+    const held = (send: boolean) => (check: boolean) => {
+      const f = this.app.workspace.getActiveFile(), id = f && this.idOf(f);
+      if (!id || !this.dodo.held.has(id)) return false;
+      if (!check) void this.dodo.release(id, send);
+      return true;
+    };
+    this.addCommand({ id: 'send-deletion', name: 'Spara borttagningen ändå', checkCallback: held(true) });
+    this.addCommand({ id: 'drop-deletion', name: 'Hämta listan från dodo igen', checkCallback: held(false) });
     if (Platform.isDesktop) { this.bar = this.addStatusBarItem(); this.bar.addClass('mod-clickable'); this.bar.onClickEvent(() => { const f = this.dodo.updated().map(id => this.fileFor(id)).find(Boolean); if (f && !this.dodo.lastError) void this.app.workspace.getLeaf().openFile(f); else new Notice(this.dodo.lastError || 'dodo: allt är skickat.'); }); this.paint(); }
 
     this.registerEvent(this.app.workspace.on('editor-change', (_e: Editor, info: MarkdownFileInfo) => { if (info.file) { this.typed.set(info.file.path, Date.now()); this.changed(info.file); } }));
@@ -251,12 +246,11 @@ export default class DodoPlugin extends Plugin implements Host {
     this.pinned.set(listIdOf(text.match(/^dodo:\s*(\S+)/m)?.[1])!, file);
     return this.note(listIdOf(text.match(/^dodo:\s*(\S+)/m)?.[1])!)!;
   }
-  notice(text: string, action?: { label: string; run: () => void }) {
-    if (!action) return void new Notice(text, 8000);
+  notice(text: string, ...actions: { label: string; run: () => void }[]) {
+    if (!actions.length) return void new Notice(text, 8000);
     const n = new Notice(text, 15000);
-    n.noticeEl.createEl('button', { text: action.label }).onclick = () => { action.run(); n.hide(); };
+    for (const a of actions) n.noticeEl.createEl('button', { text: a.label }).onclick = () => { a.run(); n.hide(); };
   }
-  confirm(text: string) { return new Promise<boolean>(res => new Confirm(this.app, text, res).open()); }
 }
 
 class Settings extends PluginSettingTab {
