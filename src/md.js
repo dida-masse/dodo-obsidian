@@ -81,10 +81,12 @@ function parseBlock(lines) {
 const ITEM = /^(?:[-*+]|\d+[.)])\s/, TODO = /^(?:[-*+]|\d+[.)])\s+\[[ xX]\]/, INDENT = /^(\t| {2,})/, FENCE = /^\s*(```|~~~)/;
 function splitDoc(text, loose) {
   const items = [];
-  let blank = false, fence = null; // fence: the item a ``` block goes into until it closes
+  let blank = false, fence = null, fenceIn = false; // fence: the item a ``` block goes into until it closes
   const add = (it, l) => (it.lines || it.block || it.notes).push(l);
   for (const l of text.split(/\r?\n/)) {
     const last = items.at(-1);
+    // a block that opened inside a note (indented) ends with the note: a "~~~~" in an e-mail signature must not take the rest of the list
+    if (fence && fenceIn && l.trim() && !INDENT.test(l)) fence = null;
     if (fence) { add(fence, l); if (FENCE.test(l)) fence = null; continue; }
     if (!l.trim()) { if (last) add(last, ''); blank = true; continue; }
     const hm = l.match(/^(#{1,6})\s+(.+)$/);
@@ -93,7 +95,7 @@ function splitDoc(text, loose) {
     else if ((loose ? ITEM : TODO).test(l) || (loose && !(INDENT.test(l) && last?.lines))) items.push(to = { lines: [l] });
     else if (last && (last.block || last.level || INDENT.test(l) || !blank && !ITEM.test(l))) add(to = last, l); // a block goes on until the next todo or heading
     else items.push(to = { block: [l] });
-    if (to && FENCE.test(l)) fence = to;
+    if (to && FENCE.test(l)) { fence = to; fenceIn = INDENT.test(l); }
     blank = false;
   }
   for (const it of items) if (it.block) it.notes = it.block.join('\n').trimEnd(); else if (it.notes) it.notes = dedent(it.notes).join('\n').trim();
