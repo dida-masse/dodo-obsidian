@@ -24,7 +24,7 @@ export interface Host {
 }
 // one line of "new since last time" from the server (GET /news): a todo added, changed, done or deleted, or someone who came or went
 export interface News { kind: string; by: string; at: string; todo?: string; text?: string; md?: boolean; who?: string; data?: any }
-export interface Snap { me: string; users: any[]; headings: any[]; todos: any[]; comments?: any[] }
+export interface Snap { me: string; users: any[]; headings: any[]; todos: any[]; comments?: any[]; keys?: any[] }
 export interface ListData { name: string; rev: number; text: string; snap: Snap; hide: boolean; off?: boolean; lost?: boolean }
 export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; seen: Record<string, string>; since: string; lists: Record<string, ListData>; fresh: Record<string, number> }
 export const emptyData = (): Data => ({ url: '', session: '', name: '', folder: 'dodo', hideDone: false, autoAdd: true, seen: {}, since: '', lists: {}, fresh: {} });
@@ -155,9 +155,9 @@ export class Dodo {
     const canon = (w: string) => (w[0] === '@' ? (d.users.find((u: any) => u.handle === w.slice(1)) || { id: w }).id : w);
     for (const x of [...d.headings, ...d.todos, ...d.todos.flatMap((t: any) => t.subs)]) x.who = [...new Set((x.who || []).map(canon))];
     d.todos.sort((a: any, b: any) => this.md.ordKey(a) - this.md.ordKey(b));
-    return { rev: d.rev, me: d.me, users: d.users, headings: d.headings, todos: d.todos, comments: d.comments || [], list: d.list };
+    return { rev: d.rev, me: d.me, users: d.users, headings: d.headings, todos: d.todos, comments: d.comments || [], keys: d.keys || [], list: d.list };
   }
-  private snap = (S: Snap): Snap => ({ me: S.me, users: S.users, headings: S.headings, todos: S.todos, comments: S.comments });
+  private snap = (S: Snap): Snap => ({ me: S.me, users: S.users, headings: S.headings, todos: S.todos, comments: S.comments, keys: S.keys });
   // the list as the document items docPlan compares with (done todos left out when they are hidden: they are not "removed" either)
   private items(S: Snap, hide: boolean): any[] {
     this.users.length = 0; this.users.push(...S.users);
@@ -439,7 +439,11 @@ export class Dodo {
   // ---- comments ----
   onSnap: (listId: string) => void = () => {};
   private told: string[] = [];
-  name(S: Snap, user: string) { return user?.[0] === '@' ? user.slice(1) : S.users.find(u => u.id === user)?.name ?? 'okänd'; }
+  // an API key (a script, the course source) writes as key:<id>, named like the web page does
+  name(S: Snap, user: string) {
+    if (user?.startsWith('key:')) return `${S.keys?.find(k => 'key:' + k.id === user)?.name ?? '?'} (nyckel)`;
+    return user?.[0] === '@' ? user.slice(1) : S.users.find(u => u.id === user)?.name ?? 'okänd';
+  }
   // someone else's comment that was not in the last snapshot: one notice for a whole batch
   private news(old: Snap, S: Snap) {
     if (!old.comments) return;
