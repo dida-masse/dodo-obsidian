@@ -461,3 +461,9 @@ test('which todo a line belongs to: todo, its note and subtask, heading, text bl
   r.dodo.markSeen(r.list, r.id('tttt1'));
   assert.equal(r.data.seen[r.id('tttt1')] > '', true);
 });
+
+test('a change by an API key (a script, the course source) is named after the key, as on the web page', () => {
+  const S = { me: 'u1', users: [{ id: 'u1', name: 'Jag' }], headings: [], todos: [], keys: [{ id: 'k1', name: 'Kursredan' }] };
+  const name = (u: string) => Dodo.prototype.name.call(null, S, u);
+  assert.deepEqual([name('key:k1'), name('key:gone'), name('u1'), name('@anna'), name('x')], ['Kursredan (nyckel)', '? (nyckel)', 'Jag', 'anna', 'okänd']);
+});
