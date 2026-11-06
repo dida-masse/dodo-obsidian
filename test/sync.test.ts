@@ -466,4 +466,5 @@ test('a change by an API key (a script, the course source) is named after the ke
   const S = { me: 'u1', users: [{ id: 'u1', name: 'Jag' }], headings: [], todos: [], keys: [{ id: 'k1', name: 'Kursredan' }] };
   const name = (u: string) => Dodo.prototype.name.call(null, S, u);
   assert.deepEqual([name('key:k1'), name('key:gone'), name('u1'), name('@anna'), name('x')], ['Kursredan (nyckel)', '? (nyckel)', 'Jag', 'anna', 'okänd']);
+  assert.deepEqual([name('guest:Kalle'), name('mail')], ['Kalle (publik länk)', 'Mejl']);
 });

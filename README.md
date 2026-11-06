@@ -34,6 +34,20 @@ Kommentarer skrivs aldrig in i anteckningen, och inte heller vem som bockade av 
 
 Kommandot *dodo: Visa kommentarer* (eller ikonen i vänsterkanten) öppnar en sidopanel med kommentarerna på uppgiften där markören står: författare, tid och text (markdown), svar indragna under tråden, lösta trådar ihopvikta. Längst ner skriver du en ny kommentar (Ctrl/Cmd+Enter skickar), och *Svara* finns på varje kommentar. Rader med kommentarer får en liten *💬 n* sist på raden (bara en markering i editorn, inte text i filen); den är färgad när någon annan har skrivit något du inte har sett, och ett klick öppnar panelen. När någon annan kommenterar får du en notis. En rad du precis har skrivit och som inte är skickad än har inga kommentarer.
 
+## Kurslistor
+
+En kurslista (dodo #38) har en uppgift per kurs, hämtad från Kursredan. Den är en vanlig dodo-lista i Obsidian, med några skillnader:
+
+- **Tabellen är källans.** Den står under uppgiften mellan två markörer (`<!-- dodo:källa -->` och `<!-- /dodo:källa -->`). I Obsidian döljs markörraderna bakom texten *Från Kursredan, kan inte ändras här*, tabellen får en dämpad bakgrund och det du skriver inuti den avvisas (med en notis första gången). Din egen text skriver du under tabellen. Tar du bort hela kursen försvinner den i dodo, men källan lägger tillbaka den vid nästa hämtning (högst en timme).
+- **Skadade markörer** (en markör borttagen med ett annat verktyg) lagas av pluginet innan det skickar: källans tabell sätts tillbaka, de lösa markörerna och de tabellrader som är källans tas bort, och det du skrev under tabellen står kvar.
+- **Taggar är `kategori/värde`**, t.ex. `#termin/ht26`, `#läsperiod/lp1`, `#fart/50`. De är nästlade taggar i Obsidian och fungerar i taggpanelen och sökningen.
+- **Rubriker** som `HT26 LP1` sätts av källan; flyttar du en kurs under en annan rubrik sätts den tillbaka vid nästa hämtning.
+- **Bockar** du av en kurs står kvar tills kursens data ändras; då bockas den ur och ändringen står som `**12** ← 10` i tabellen.
+
+## Gäster
+
+En besökare av en publik länk (kommentar, anteckning, avbockning) heter *Namn (publik länk)* i kommentarspanelen, i notiserna och i *Nytt sedan sist*; mejl heter *Mejl* och en API-nyckel *Namn (nyckel)*.
+
 ## Utveckling
 
 `npm run md` kopierar reglerna för texten från `../dodo/public/md.js` (till `src/md.js`, som är incheckad). `npm run build` bygger `main.js`. `npm test` säger till om `src/md.js` inte längre är det `npm run md` gör av `../dodo/public/md.js` (finns inte dodo bredvid hoppas det över). Det startar också en riktig dodo-server från `../dodo` i en tillfällig mapp och provar synken mot den (Node 22+).
