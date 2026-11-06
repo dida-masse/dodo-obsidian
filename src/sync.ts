@@ -24,6 +24,19 @@ export interface Host {
 }
 // one line of "new since last time" from the server (GET /news): a todo added, changed, done or deleted, or someone who came or went
 export interface News { kind: string; by: string; at: string; todo?: string; text?: string; md?: boolean; who?: string; data?: any }
+// A course's table sits between two markers and is the source's: the server puts it back whatever is sent. If the markers in the note were damaged
+// (one gone, or both) the server would take the strays for the person's own text and the table would be there twice. So a note whose markers are not
+// exactly one complete pair gets the source's block back first, the stray markers go, and so do the table lines that are the block's own.
+const SRC_OPEN = '<!-- dodo:källa -->', SRC_CLOSE = '<!-- /dodo:källa -->';
+export function mendSource(local: string, server: string | undefined): string {
+  const i = server?.indexOf(SRC_OPEN) ?? -1, j = server?.indexOf(SRC_CLOSE) ?? -1;
+  if (!server || i < 0 || j < i) return local;
+  const count = (t: string, m: string) => t.split(m).length - 1;
+  if (count(local, SRC_OPEN) === 1 && count(local, SRC_CLOSE) === 1 && local.indexOf(SRC_OPEN) < local.indexOf(SRC_CLOSE)) return local;
+  const block = server.slice(i, j + SRC_CLOSE.length), own = new Set(block.split('\n').filter(l => l.trim().startsWith('|')).map(l => l.trim()));
+  const rest = local.split('\n').filter(l => !l.includes(SRC_OPEN) && !l.includes(SRC_CLOSE) && !own.has(l.trim())).join('\n').trim();
+  return block + (rest ? '\n\n' + rest : '');
+}
 export interface Snap { me: string; users: any[]; headings: any[]; todos: any[]; comments?: any[]; keys?: any[] }
 export interface ListData { name: string; rev: number; text: string; snap: Snap; hide: boolean; off?: boolean; lost?: boolean }
 export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; seen: Record<string, string>; since: string; lists: Record<string, ListData>; fresh: Record<string, number> }
@@ -370,7 +383,7 @@ export class Dodo {
       return { id: uid(), notes: '', subs: [], due: null, prio: 0, ...p, doneBy: p.done ? S.me : null, doneAt: p.done ? Date.now() : null };
     };
     const applyBlock = (t: any, p: any, h: string | null, base: string) => {
-      Object.assign(t, { text: p.text, tags: p.tags, who: p.who, due: p.due, prio: p.prio, notes: p.notes, subs: p.subs, h, base });
+      Object.assign(t, { text: p.text, tags: p.tags, who: p.who, due: p.due, prio: p.prio, notes: mendSource(p.notes, t.notes), subs: p.subs, h, base });
       if (p.done) t.subs.forEach((s: any) => s.done = true);
       const done = p.done || (t.subs.length > 0 && t.subs.every((s: any) => s.done));
       if (done !== t.done) setDone(t, done);
@@ -442,6 +455,8 @@ export class Dodo {
   // an API key (a script, the course source) writes as key:<id>, named like the web page does
   name(S: Snap, user: string) {
     if (user?.startsWith('key:')) return `${S.keys?.find(k => 'key:' + k.id === user)?.name ?? '?'} (nyckel)`;
+    if (user?.startsWith('guest:')) return `${user.slice(6)} (publik länk)`; // a visitor of a public link, who only gave a name
+    if (user === 'mail') return 'Mejl';
     return user?.[0] === '@' ? user.slice(1) : S.users.find(u => u.id === user)?.name ?? 'okänd';
   }
   // someone else's comment that was not in the last snapshot: one notice for a whole batch
