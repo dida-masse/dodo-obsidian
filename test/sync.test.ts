@@ -245,6 +245,27 @@ test('a time of day and an end follow the date, both ways, and a todo without on
   assert.deepEqual([s.todos.find((x: any) => x.id === r.id('tttt1')).due, s.todos.find((x: any) => x.id === r.id('tttt1')).time], [null, undefined]);
 });
 
+test('a period (the last day) follows the date, both ways, with and without a time, and a todo without one is untouched', async () => {
+  const r = await mk(); await seed(r); await r.dodo.enable(r.list);
+  r.vault.edit(r.list, t => t.replace('- [ ] mjölk #mat', '- [ ] mjölk #mat ^2030-01-02..2030-01-04').replace('- [ ] smör', '- [ ] smör ^2030-01-03..2030-01-05 14:30-10:00'));
+  await r.dodo.flush(r.list);
+  let s = await state(r);
+  const get = (i: string) => { const t = s.todos.find((x: any) => x.id === r.id(i)); return [t.due, t.dueEnd, t.time, t.until]; };
+  assert.deepEqual(get('tttt1'), ['2030-01-02', '2030-01-04', undefined, undefined]);
+  assert.deepEqual(get('tttt3'), ['2030-01-03', '2030-01-05', '14:30', '10:00']);
+  assert.equal(s.todos.find((x: any) => x.id === r.id('tttt2')).dueEnd, undefined);
+  // the other way: dodo's period comes back in the note, and the next tick changes nothing
+  await r.todo(r.id('tttt2'), 'bröd', { due: '2030-01-06', dueEnd: '2030-01-08' });
+  await r.dodo.tick();
+  assert.match(body(r), /- \[ \] bröd \^2030-01-06\.\.2030-01-08/);
+  const before = body(r); await r.dodo.tick(); assert.equal(body(r), before);
+  // the last day is removed in the note: the first day stays
+  r.vault.edit(r.list, t => t.replace(' ^2030-01-02..2030-01-04', ' ^2030-01-02'));
+  await r.dodo.flush(r.list);
+  s = await state(r);
+  assert.deepEqual(get('tttt1'), ['2030-01-02', undefined, undefined, undefined]);
+});
+
 test('adding and removing todos and text paragraphs', async () => {
   const r = await mk(); await seed(r); await r.dodo.enable(r.list);
   r.vault.edit(r.list, t => t.replace('- [ ] mjölk #mat\n', '') + '\n- [ ] nytt @anna ^2030-01-02\n\nEtt stycke med **text**.\n');
