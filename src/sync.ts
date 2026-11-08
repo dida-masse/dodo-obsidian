@@ -384,6 +384,8 @@ export class Dodo {
     };
     const applyBlock = (t: any, p: any, h: string | null, base: string) => {
       Object.assign(t, { text: p.text, tags: p.tags, who: p.who, due: p.due, prio: p.prio, notes: mendSource(p.notes, t.notes), subs: p.subs, h, base });
+      // the time of day follows the date: a note without it clears it (the parser leaves the keys out)
+      if (p.time) { t.time = p.time; if (p.until) t.until = p.until; else delete t.until; } else { delete t.time; delete t.until; }
       if (p.done) t.subs.forEach((s: any) => s.done = true);
       const done = p.done || (t.subs.length > 0 && t.subs.every((s: any) => s.done));
       if (done !== t.done) setDone(t, done);

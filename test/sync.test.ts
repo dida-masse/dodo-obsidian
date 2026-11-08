@@ -224,6 +224,27 @@ test('an edited line keeps its todo id and is one PUT; typing is left alone unti
   assert.equal(body(r), '## Inköp\n- [ ] mjölk #mat\n- [ ] bröd och pålägg !hög\n- [ ] smör');
 });
 
+test('a time of day and an end follow the date, both ways, and a todo without one is untouched', async () => {
+  const r = await mk(); await seed(r); await r.dodo.enable(r.list);
+  r.vault.edit(r.list, t => t.replace('- [ ] mjölk #mat', '- [ ] mjölk #mat ^2030-01-02 14.30-15:30').replace('- [ ] smör', '- [ ] smör ^2030-01-03 09:00'));
+  await r.dodo.flush(r.list);
+  let s = await state(r);
+  assert.deepEqual(['tttt1', 'tttt3'].map(i => { const t = s.todos.find((x: any) => x.id === r.id(i)); return [t.due, t.time, t.until]; }), [['2030-01-02', '14:30', '15:30'], ['2030-01-03', '09:00', undefined]]);
+  assert.equal(s.todos.find((x: any) => x.id === r.id('tttt2')).time, undefined);
+  // the other way: dodo's time comes back in the note, and the next tick changes nothing
+  await r.todo(r.id('tttt2'), 'bröd', { due: '2030-01-04', time: '18:00', until: '19:00' });
+  await r.dodo.tick();
+  assert.match(body(r), /- \[ \] bröd \^2030-01-04 18:00-19:00/);
+  const before = body(r); await r.dodo.tick(); assert.equal(body(r), before);
+  // the time is removed in the note, the date stays
+  r.vault.edit(r.list, t => t.replace(' ^2030-01-02 14:30-15:30', '').replace(' ^2030-01-03 09:00', ' ^2030-01-03'));
+  await r.dodo.flush(r.list);
+  s = await state(r);
+  const smor = s.todos.find((x: any) => x.id === r.id('tttt3'));
+  assert.deepEqual([smor.due, smor.time, smor.until], ['2030-01-03', undefined, undefined]);
+  assert.deepEqual([s.todos.find((x: any) => x.id === r.id('tttt1')).due, s.todos.find((x: any) => x.id === r.id('tttt1')).time], [null, undefined]);
+});
+
 test('adding and removing todos and text paragraphs', async () => {
   const r = await mk(); await seed(r); await r.dodo.enable(r.list);
   r.vault.edit(r.list, t => t.replace('- [ ] mjölk #mat\n', '') + '\n- [ ] nytt @anna ^2030-01-02\n\nEtt stycke med **text**.\n');
