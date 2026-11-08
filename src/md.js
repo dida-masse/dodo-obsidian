@@ -47,25 +47,37 @@ const person = n => { n = n.toLowerCase(); const u = USERS.find(u => u.active &&
 const PRIO = { sv: ['hög', 'låg'], en: ['high', 'low'], de: ['hoch', 'niedrig'], sr: ['visok', 'nizak'] };
 const PRIO_HIGH = ['hög', 'hog', 'high', 'hoch', 'visok'], PRIO_LOW = ['låg', 'lag', 'low', 'niedrig', 'nizak'];
 const PRIO_RE = new RegExp(`(^|\\s)!(${[...PRIO_HIGH, ...PRIO_LOW].join('|')})(?=\\s|$)`, 'giu');
-// ^fredag 14:30 and ^fredag 14:30-15:30 (also 14.30): the time counts only straight after the date, so a 14:30 in the text is left alone
+// ^fredag 14:30 and ^fredag 14:30-15:30 (also 14.30): the time counts only straight after the date, so a 14:30 in the text is left alone.
+// ^fredag..söndag is a period (no spaces around ..): the time is then the start on the first day and the end on the last
 const CLOCK_RE = /(^|\s)(?:\^|📅\s*)(\S+)(?:\s+(\d{1,2}[:.]\d{2}(?:\s*-\s*\d{1,2}[:.]\d{2})?)(?=[\s.,;!?]|$))?/gu;
 // "14.30-15:30" -> ['14:30', '15:30'] ([null, null] when it is not a time of day; an end that is not after the start is dropped)
-function clockOf(a) {
+function clockOf(a, period) {
   const hm = v => { const m = v?.match(/^(\d{1,2})[:.](\d{2})$/); return m && +m[1] < 24 && +m[2] < 60 ? `${m[1].padStart(2, '0')}:${m[2]}` : null; };
   const [x, y] = (a || '').split('-').map(v => v.trim()), time = hm(x), until = hm(y);
-  return time ? [time, until && until > time ? until : null] : [null, null];
+  return time ? [time, until && (period || until > time) ? until : null] : [null, null];
+}
+const plusDays = (d, n) => iso(addDays(new Date(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)), n));
+// the end of a period: a weekday or week number is the first one on or after the start (^fredag..söndag, whatever day it is today); null if it is not after it
+function endOf(v, start) {
+  v = v.replace(/[.,;:]$/, '');
+  let d = parseDate(v);
+  if (d && d < start && /^\p{L}{3,}$/u.test(v) && !Object.values(DATE_WORDS).some(ws => ws.includes(v.toLowerCase()))) while (d < start) d = plusDays(d, 7);
+  return d && d > start ? d : null;
 }
 function parseLine(line) {
   const m = line.match(/^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\[([ xX])\]\s*)?(.*)$/);
-  const tags = [], who = []; let due = null, time = null, until = null, prio = 0;
+  const tags = [], who = []; let due = null, dueEnd = null, time = null, until = null, prio = 0;
   let rest = m[2]
     .replace(/\s*✅\s*\d{4}-\d{2}-\d{2}/gu, '') // Obsidian Tasks done date; done state comes from [x]
-    .replace(CLOCK_RE, (all, s, v, a) => { const d = parseDate(v); if (!d) return all; due = d; const [tm, un] = clockOf(a); if (a && !tm) return s + a; [time, until] = [tm, un]; return s; })
+    .replace(CLOCK_RE, (all, s, v, a) => {
+      const [v1, v2] = v.split('..'), d = parseDate(v1); if (!d) return all; const end = v2 ? endOf(v2, d) : null; // a period whose end is not a date later than the start is not a date
+      if (v2 && !end) return all;
+      due = d; dueEnd = end; const [tm, un] = clockOf(a, !!end); if (a && !tm) return s + a; [time, until] = [tm, un]; return s; })
     .replace(PRIO_RE, (_, s, p) => { prio = PRIO_HIGH.includes(p.toLowerCase()) ? 1 : -1; return s; })
     .replace(/\s*(🔺|⏫|🔼|🔽|⏬)/gu, (_, e) => { prio = '🔺⏫'.includes(e) ? 1 : '🔽⏬'.includes(e) ? -1 : 0; return ' '; })
     .replace(/(^|\s)#([\p{L}\p{N}_\/-]+)/gu, (_, s, t) => { t = t.toLowerCase(); if (!tags.includes(t)) tags.push(t); return s; })
     .replace(MENTION, (all, s, n) => { const core = n.replace(/[.-]+$/, ''), p = person(core); if (!p) return all; if (!who.includes(p)) who.push(p); return s + n.slice(core.length); });
-  return { done: !!m[1] && m[1] !== ' ', text: rest.replace(/\s+/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim(), tags, who, due, ...(time && { time, ...(until && { until }) }), prio };
+  return { done: !!m[1] && m[1] !== ' ', text: rest.replace(/\s+/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim(), tags, who, due, ...(dueEnd && { dueEnd }), ...(time && { time, ...(until && { until }) }), prio };
 }
 // First line is the todo; indented "- [ ]" lines below are its subtasks, everything else its notes
 const TASK = /^\s*[-*+]\s+\[[ xX]\]/;
@@ -116,7 +128,7 @@ const headingText = h => [headingLine(h), h.notes && (h.notes.split('\n').some(l
 function line(x, tasks) {
   const extra = tasks
     ? [x.prio > 0 && '⏫', x.prio < 0 && '🔽', x.due && '📅 ' + x.due, x.done && x.doneAt && '✅ ' + iso(new Date(x.doneAt))]
-    : [x.due && '^' + x.due + (x.time ? ' ' + x.time + (x.until ? '-' + x.until : '') : ''), x.prio > 0 && '!' + PRIO[LANG][0], x.prio < 0 && '!' + PRIO[LANG][1]];
+    : [x.due && '^' + x.due + (x.dueEnd > x.due ? '..' + x.dueEnd : '') + (x.time ? ' ' + x.time + (x.until ? '-' + x.until : '') : ''), x.prio > 0 && '!' + PRIO[LANG][0], x.prio < 0 && '!' + PRIO[LANG][1]];
   return [`- [${x.done ? 'x' : ' '}]`, x.text, ...(x.tags || []).map(g => '#' + g), ...(x.who || []).map(w => '@' + handle(w)), ...extra].filter(Boolean).join(' ');
 }
 function serialize(t, tasks) {
