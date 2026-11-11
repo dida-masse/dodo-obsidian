@@ -47,7 +47,7 @@ test('a second identical note appears later: it is trashed, one note remains, no
 
 test('a copy that equals the last synced text is trashed even when the kept note has an unsent edit, and the edit is sent as usual', async () => {
   const r = await mk(), kept = tied(r)[0], old = r.vault.files.get(kept)!;
-  r.vault.files.set(kept, old + '- [ ] ägg\n');
+  r.vault.files.set(kept, old + '- [ ] ägg\n'); r.vault.typedIn.add(kept); // typed in this session: its edits are real and being made now
   r.vault.files.set(`dodo/Lista ${n} 2.md`, old);
   await r.dodo.dedupe(r.list);
   assert.deepEqual(tied(r), [kept]);
@@ -159,4 +159,51 @@ test('the same, when the stale copy has a line of its own: it goes to Borttagna 
   await r.dodo.dedupe(r.list); await r.dodo.flush(r.list);
   assert.equal(r.vault.notices.length, 1);
   assert.equal([...r.vault.files].filter(([p]) => p.startsWith('dodo/Borttagna/')).length, 1);
+});
+
+// a fresh start (nothing pinned, nothing typed) with two files delivered while Obsidian was closed: `old` and the current text
+const start = async (order: 'old first' | 'cur first', extra = '') => {
+  const r = await rig(srv, `Lista ${++n}`, ses);
+  for (const t of ['ett', 'tva', 'tre']) await r.todo(r.id(t), t);
+  await r.dodo.enable(r.list);
+  const old = r.vault.files.get(tied(r)[0])!;
+  for (const t of ['fyra', 'fem']) await r.todo(r.id(t), t);
+  await r.dodo.flush(r.list);
+  const cur = r.vault.files.get(tied(r)[0])!, a = `dodo/Lista ${n}.md`, b = `dodo/Lista ${n} 2.md`;
+  r.vault.files.clear(); r.vault.pins.clear(); r.vault.typedIn.clear();
+  const put = { old: () => r.vault.files.set(a, old), cur: () => r.vault.files.set(b, cur + extra) };
+  if (order === 'old first') { put.old(); put.cur(); } else { put.cur(); put.old(); }
+  const todos = async () => (await r.anna('GET', '/state')).todos.map((t: any) => t.text).sort();
+  return { r, old, cur, a, b, todos };
+};
+
+for (const order of ['old first', 'cur first'] as const) test(`at start, a stale copy that wins the rule does not reach dodo (${order}), and a second run changes nothing`, async () => {
+  const { r, cur, a, todos } = await start(order), was = await todos(), sent = writes(r.log).length;
+  assert.equal(was.length, 5);
+  await r.dodo.dedupeAll(); await r.dodo.flush(r.list);
+  assert.deepEqual(tied(r), [a]);
+  assert.equal(r.vault.files.get(a), cur);
+  assert.deepEqual(await todos(), was);
+  assert.equal(writes(r.log).length, sent);
+  const files = JSON.stringify([...r.vault.files]), notes = r.vault.notices.length;
+  await r.dodo.dedupeAll(); await r.dodo.dedupe(r.list); await r.dodo.flush(r.list);
+  assert.equal(JSON.stringify([...r.vault.files]), files);
+  assert.equal(r.vault.notices.length, notes);
+  assert.deepEqual(await todos(), was);
+});
+
+for (const order of ['old first', 'cur first'] as const) test(`at start, a note with an unsent line next to a copy equal to the last synced text: dodo is unchanged, the line is set aside with a notice (${order})`, async () => {
+  const { r, a, b, cur, todos } = await start(order), was = await todos();
+  r.vault.files.set(a, cur + '- [ ] sex\n'); // the unsent line, in the file that wins the rule; b is the copy equal to the synced text
+  await r.dodo.dedupeAll(); await r.dodo.flush(r.list);
+  assert.deepEqual(tied(r), [a]);
+  assert.equal(r.vault.files.get(a), cur);
+  const aside = [...r.vault.files].filter(([p]) => p.startsWith('dodo/Borttagna/'));
+  assert.equal(aside.length, 1);
+  assert.match(aside[0][1], /sex/);
+  assert.equal(r.vault.notices.length, 1);
+  assert.deepEqual(await todos(), was);
+  const files = JSON.stringify([...r.vault.files]);
+  await r.dodo.dedupeAll(); await r.dodo.flush(r.list);
+  assert.equal(JSON.stringify([...r.vault.files]), files);
 });

@@ -66,6 +66,8 @@ export class FakeVault implements Host {
     return p ? { read: async () => this.files.get(p)!, replace: async (from, to) => { if (this.files.get(p) !== from) return false; this.files.set(p, to); return true; } } : null;
   }
   async copies(id: string) { return [...this.files].filter(([, t]) => tieOf(t) === id).map(([path]) => ({ path, read: async () => this.files.get(path)! })); }
+  typedIn = new Set<string>(); // paths the user has typed in this session (main.ts: the `typed` map); a restart is a new FakeVault state with this cleared
+  isTyped(path: string) { return this.typedIn.has(path); }
   where(id: string) { return this.path(id) ?? null; }
   adopt(id: string, path: string) { this.hidden.delete(path); this.pins.set(id, path); }
   async trash(path: string) { this.files.delete(path); this.trashed.push(path); }

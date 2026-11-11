@@ -28,6 +28,7 @@ export interface Host {
   // every note whose frontmatter ties it to the list, wherever it lies: files the metadata cache has not read yet are read from disk (note() only sees what the cache knows)
   copies(listId: string): Promise<{ path: string; read(): Promise<string> }[]>;
   where(listId: string): string | null; // the path of the note this device is syncing for the list right now (what note() would use), asked before adopt
+  isTyped(path: string): boolean; // the user has typed in this file in this session (its edits are being made now, not left from before a restart)
   adopt(listId: string, path: string): void; // this file is the list's note from now on (note(), base(), dir() answer for it)
   trash(path: string): Promise<void>; // through the user's trash setting, never a hard delete
   aside(path: string, from: string, to: string, dir: string): Promise<boolean>; // writes `to` if the file still is `from`, then moves it into `dir` under a free name
@@ -235,9 +236,17 @@ export class Dodo {
   }
   async dedupe(id: string) {
     return this.locked(id, async () => {
-      const h = this.d.host, ld = this.data.lists[id], prev = h.where(id), all = await h.copies(id); // prev: before adopt changes the answer
+      const h = this.d.host, ld = this.data.lists[id], pin = h.where(id), all = await h.copies(id); // the pin is asked before adopt changes the answer
       if (!all.length) return;
-      const order = this.keepOrder(id, all.map(c => c.path)), keep = all.find(c => c.path === order[0])!, from = all.find(c => c.path === prev);
+      const order = this.keepOrder(id, all.map(c => c.path)), keep = all.find(c => c.path === order[0])!, pinned = all.find(c => c.path === pin);
+      // Which copy's text lives on (`from`) is decided by content, the pin only where it means something: at start the pin is whatever file was met first.
+      // 1) the pinned note with text the user is typing right now; 2) else a copy equal to the last synced text, which is what this device had in step with dodo
+      // (the winner itself if it is one); 3) else the pinned note. Accepted: edits left unsent from before a restart, in a note that then meets a copy equal
+      // to the last synced text, are set aside with a notice instead of being sent: nothing is lost, and nothing stale reaches dodo.
+      const same = async (c: { read(): Promise<string> }) => squash(split(await c.read().catch(() => '')).text) === squash(ld?.text ?? '\0');
+      let from = ld && pinned && h.isTyped(pinned.path) && !await same(pinned) ? pinned : undefined;
+      if (ld && !from) for (const p of order) { const c = all.find(c => c.path === p)!; if (await same(c)) { from = c; break; } }
+      from ??= pinned;
       if (ld?.lost) return h.adopt(id, keep.path);
       let kept = squash(split(await keep.read()).text);
       // The rule only says which PATH stays. If this device was syncing another file, that file's text is the one that goes on (its synced state and
