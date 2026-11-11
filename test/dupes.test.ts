@@ -105,3 +105,58 @@ test('running the check twice changes nothing more', async () => {
   assert.equal(r.vault.notices.length, notes);
   assert.equal(r.vault.trashed.length, trashed);
 });
+
+// a note synced here, renamed to "Stale 2" by a move; the file sync then brings an OLD copy at the plain name, which wins the rule
+const stale = async () => {
+  const r = await rig(srv, `Lista ${++n}`, ses);
+  for (const t of ['ett', 'tre']) await r.todo(r.id(t), t);
+  await r.dodo.enable(r.list);
+  const from = tied(r)[0], old = r.vault.files.get(from)!;
+  for (const t of ['fyra', 'fem']) await r.todo(r.id(t), t);
+  await r.dodo.flush(r.list);
+  const cur = r.vault.files.get(from)!, plain = from, moved = from.replace('.md', ' 2.md');
+  r.vault.files.delete(from); r.vault.files.set(moved, cur); r.vault.pins.set(r.list, moved);
+  await r.dodo.flush(r.list);
+  r.vault.files.set(plain, old);
+  const todos = async () => (await r.anna('GET', '/state')).todos.map((t: any) => t.text).sort();
+  return { r, old, cur, plain, moved, todos };
+};
+
+test('a stale copy that wins the rule does not become the note: the note this device syncs gives its text, dodo keeps every todo, nothing is sent', async () => {
+  const { r, cur, plain, todos } = await stale(), was = await todos(), sent = writes(r.log).length;
+  assert.equal(was.length, 4);
+  await r.dodo.dedupe(r.list); await r.dodo.flush(r.list);
+  assert.deepEqual(tied(r), [plain]);
+  assert.equal(r.vault.files.get(plain), cur);
+  assert.deepEqual(await todos(), was);
+  assert.equal(writes(r.log).length, sent);
+  assert.equal(r.vault.notices.length, 0);
+  const files = JSON.stringify([...r.vault.files]); // and again: nothing more
+  await r.dodo.dedupe(r.list); await r.dodo.dedupeAll(); await r.dodo.flush(r.list);
+  assert.equal(JSON.stringify([...r.vault.files]), files);
+  assert.deepEqual(await todos(), was);
+});
+
+test('the same, when the note this device syncs has an unsent edit: the edit is sent and nothing else changes', async () => {
+  const { r, plain, moved, todos } = await stale();
+  r.vault.files.set(moved, r.vault.files.get(moved)! + '- [ ] sex\n');
+  await r.dodo.dedupe(r.list); await r.dodo.flush(r.list);
+  assert.deepEqual(tied(r), [plain]);
+  assert.deepEqual(await todos(), ['ett', 'fem', 'fyra', 'sex', 'tre']);
+});
+
+test('the same, when the stale copy has a line of its own: it goes to Borttagna with the notice and does not reach dodo', async () => {
+  const { r, old, plain, cur, todos } = await stale(), was = await todos();
+  r.vault.files.set(plain, old + 'en rad som bara finns här\n');
+  await r.dodo.dedupe(r.list); await r.dodo.flush(r.list);
+  assert.deepEqual(tied(r), [plain]);
+  assert.equal(r.vault.files.get(plain), cur);
+  const aside = [...r.vault.files].filter(([p]) => p.startsWith('dodo/Borttagna/'));
+  assert.equal(aside.length, 1);
+  assert.match(aside[0][1], /en rad som bara finns här/);
+  assert.equal(r.vault.notices.length, 1);
+  assert.deepEqual(await todos(), was);
+  await r.dodo.dedupe(r.list); await r.dodo.flush(r.list);
+  assert.equal(r.vault.notices.length, 1);
+  assert.equal([...r.vault.files].filter(([p]) => p.startsWith('dodo/Borttagna/')).length, 1);
+});

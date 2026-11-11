@@ -303,6 +303,7 @@ export default class DodoPlugin extends Plugin implements Host {
     }
     return out;
   }
+  where(id: string) { return this.fileFor(id)?.path ?? null; }
   adopt(id: string, path: string) { const f = this.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) this.pinned.set(id, f); }
   async trash(path: string) { const f = this.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) await this.app.fileManager.trashFile(f); }
   async aside(path: string, from: string, to: string, dir: string) {

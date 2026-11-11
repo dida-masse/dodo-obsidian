@@ -52,13 +52,22 @@ export class FakeVault implements Host {
   notices: { text: string; action?: any; actions: any[] }[] = [];
   hidden = new Set<string>(); // files the metadata cache has not read yet: note() does not see them, copies() does (the real vault: cache first, disk when the cache has nothing)
   trashed: string[] = []; // what was sent to the trash (the real one follows the user's setting; here it is just gone from files)
-  private path(id: string) { return [...this.files].find(([p, t]) => !this.hidden.has(p) && listIdOf(t.match(/^---\n[\s\S]*?^dodo:\s*(\S+)/m)?.[1]) === id)?.[0]; }
+  pins = new Map<string, string>(); // like main.ts's pinned: the file a list's note is until it is gone
+  private path(id: string) {
+    const pin = this.pins.get(id);
+    if (pin && this.files.has(pin)) return pin;
+    const p = this.find(id);
+    if (p) this.pins.set(id, p);
+    return p;
+  }
+  private find(id: string) { return [...this.files].find(([p, t]) => !this.hidden.has(p) && listIdOf(t.match(/^---\n[\s\S]*?^dodo:\s*(\S+)/m)?.[1]) === id)?.[0]; }
   note(id: string): Note | null {
     const p = this.path(id);
     return p ? { read: async () => this.files.get(p)!, replace: async (from, to) => { if (this.files.get(p) !== from) return false; this.files.set(p, to); return true; } } : null;
   }
   async copies(id: string) { return [...this.files].filter(([, t]) => tieOf(t) === id).map(([path]) => ({ path, read: async () => this.files.get(path)! })); }
-  adopt(_id: string, path: string) { this.hidden.delete(path); } // the real one pins the file; here it is visible to note() from now on
+  where(id: string) { return this.path(id) ?? null; }
+  adopt(id: string, path: string) { this.hidden.delete(path); this.pins.set(id, path); }
   async trash(path: string) { this.files.delete(path); this.trashed.push(path); }
   async aside(path: string, from: string, to: string, dir: string) {
     if (this.files.get(path) !== from) return false;
@@ -70,12 +79,12 @@ export class FakeVault implements Host {
   async move(id: string, dir: string) {
     const from = this.path(id)!, stem = from.split('/').pop()!.replace(/\.md$/, '');
     const to = freeName(dir, stem, p => this.exists(p)).path;
-    this.files.set(to, this.files.get(from)!); this.files.delete(from);
+    this.files.set(to, this.files.get(from)!); this.files.delete(from); this.pins.set(id, to);
   }
   async rename(id: string, stem: string) {
     const from = this.path(id)!, dir = from.split('/').slice(0, -1).join('/');
     const to = freeName(dir, stem, p => p !== from && this.exists(p)).path;
-    const t = this.files.get(from)!; this.files.delete(from); this.files.set(to, t);
+    const t = this.files.get(from)!; this.files.delete(from); this.files.set(to, t); this.pins.set(id, to);
   }
   base(id: string) { const p = this.path(id); return p ? p.split('/').pop()!.replace(/\.md$/, '') : null; }
   folders = new Set<string>(); // folders made on their own (empty ones); the others follow from the files

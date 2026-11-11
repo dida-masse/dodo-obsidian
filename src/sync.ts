@@ -27,6 +27,7 @@ export interface Host {
   create(path: string, text: string): Promise<Note>;
   // every note whose frontmatter ties it to the list, wherever it lies: files the metadata cache has not read yet are read from disk (note() only sees what the cache knows)
   copies(listId: string): Promise<{ path: string; read(): Promise<string> }[]>;
+  where(listId: string): string | null; // the path of the note this device is syncing for the list right now (what note() would use), asked before adopt
   adopt(listId: string, path: string): void; // this file is the list's note from now on (note(), base(), dir() answer for it)
   trash(path: string): Promise<void>; // through the user's trash setting, never a hard delete
   aside(path: string, from: string, to: string, dir: string): Promise<boolean>; // writes `to` if the file still is `from`, then moves it into `dir` under a free name
@@ -234,22 +235,46 @@ export class Dodo {
   }
   async dedupe(id: string) {
     return this.locked(id, async () => {
-      const h = this.d.host, ld = this.data.lists[id], all = await h.copies(id);
+      const h = this.d.host, ld = this.data.lists[id], prev = h.where(id), all = await h.copies(id); // prev: before adopt changes the answer
       if (!all.length) return;
-      const order = this.keepOrder(id, all.map(c => c.path)), keep = all.find(c => c.path === order[0])!;
+      const order = this.keepOrder(id, all.map(c => c.path)), keep = all.find(c => c.path === order[0])!, from = all.find(c => c.path === prev);
+      if (ld?.lost) return h.adopt(id, keep.path);
+      let kept = squash(split(await keep.read()).text);
+      // The rule only says which PATH stays. If this device was syncing another file, that file's text is the one that goes on (its synced state and
+      // unsent edits), never the stale text of the winner: it would be sent to dodo as edits and delete what others added since.
+      // Order: the winner's own text is set aside or trashed first, then prev's text is written at the winner's path, then prev goes; at every step the text is in some file.
+      if (ld && from && from !== keep) {
+        const pf = await from.read().catch(() => null), kf = await keep.read().catch(() => null);
+        if (pf != null && kf != null) {
+          const pt = squash(split(pf).text), kt = squash(split(kf).text), known = new Set([...pt.split('\n'), ...(ld.text ? squash(ld.text).split('\n') : [])]);
+          if (kt === pt) await h.trash(from.path).catch(() => {}); // the winner already has the text: nothing to move
+          else {
+            // a winner whose every line is in the note or in the last synced text is just stale (an older version); a line that is nowhere else is the user's own
+            if (kt.split('\n').some(l => !known.has(l))) { if (!await this.setAside(keep.path, kf, keep.path, `dodo: »${keep.path}« hade text som varken finns i dodo eller i anteckningen du har arbetat i. Den är lagd i ${this.asideDir()} med en rad överst, och »${keep.path}« har nu din anteckning.`)) return; }
+            else await h.trash(keep.path);
+            await h.create(keep.path, pf);
+            await h.trash(from.path).catch(() => {});
+          }
+          kept = squash(split(pf).text);
+        }
+      }
       h.adopt(id, keep.path);
-      if (ld?.lost) return;
-      const kept = squash(split(await keep.read()).text);
-      for (const c of order.slice(1).map(p => all.find(c => c.path === p)!)) {
+      for (const c of all) {
+        if (c.path === keep.path || (c === from && ld)) continue;
         const file = await c.read().catch(() => null);
         if (file == null) continue;
         const text = squash(split(file).text);
-        if (text === kept || (ld && text === squash(ld.text))) { await h.trash(c.path).catch(() => {}); continue; }
-        const { head } = split(file), cut = head.replace(/^dodo:/m, 'dodo-kopia:');
-        if (await h.aside(c.path, file, cut + copyNote(keep.path) + '\n\n' + file.slice(head.length), this.asideDir()).catch(() => false))
-          h.notice(`dodo: »${keep.path}« och »${c.path}« var två anteckningar för samma lista och hade olika text. »${keep.path}« är listans anteckning. »${c.path}« är lagd i ${this.asideDir()} med en rad överst. Texten finns kvar i båda.`);
+        if (text === kept || (ld && text === squash(ld.text))) await h.trash(c.path).catch(() => {});
+        else await this.setAside(c.path, file, keep.path, `dodo: »${keep.path}« och »${c.path}« var två anteckningar för samma lista och hade olika text. »${keep.path}« är listans anteckning. »${c.path}« är lagd i ${this.asideDir()} med en rad överst. Texten finns kvar i båda.`);
       }
     });
+  }
+  // cuts the tie of a copy that holds text of its own, puts a line at the top and moves it aside
+  private async setAside(path: string, file: string, keptPath: string, told: string) {
+    const { head } = split(file);
+    const ok = await this.d.host.aside(path, file, head.replace(/^dodo:/m, 'dodo-kopia:') + copyNote(keptPath) + '\n\n' + file.slice(head.length), this.asideDir()).catch(() => false);
+    if (ok) this.d.host.notice(told);
+    return ok;
   }
   // at start, once the vault is indexed
   async dedupeAll() { await Promise.all(Object.keys(this.data.lists).map(id => this.dedupe(id))); }
