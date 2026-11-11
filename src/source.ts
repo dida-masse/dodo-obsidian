@@ -1,7 +1,7 @@
 // A course's table (dodo #38): the source's, and the server puts it back whatever is written. Nothing here is text in the file, only decorations
 // and a filter on what is typed.
-import { EditorState, StateField, RangeSetBuilder, type Extension, type Text } from '@codemirror/state';
-import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view';
+import { EditorState, StateEffect, StateField, RangeSetBuilder, MapMode, type Extension, type Text } from '@codemirror/state';
+import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet } from '@codemirror/view';
 
 // ---- a course's table: between two markers, and the source's (the server puts it back whatever is written) ----
 // The two marker lines are replaced by a short label, the lines between get a muted background, and a typed change inside the block is
@@ -46,13 +46,42 @@ export function parseBlock(lines: string[]): Table | null {
   const first = t.findIndex(x => x.startsWith('|')), change = t.slice(0, first).join(' ');
   return { ...(change ? { change: unescape(change.replace(/^\*(.*?:)\* /, '$1 ')) } : {}), head: splitRow(rows[0]).map(cellOf), rows: [rows[0], ...rows.slice(2)].slice(1).map(r => splitRow(r).map(cellOf)) };
 }
-class TableWidget extends WidgetType {
-  constructor(private t: Table) { super(); }
-  eq(o: TableWidget) { return JSON.stringify(o.t) === JSON.stringify(this.t); }
-  toDOM() {
+// Fold state: the field holds the start positions of the blocks whose state differs from the default (mapped through changes);
+// these effects toggle one block, or clear them all when the default changes. Nothing of it is written to the file.
+export const toggleTable = StateEffect.define<number>(); export const resetTables = StateEffect.define<null>();
+const foldField = StateField.define<number[]>({
+  create: () => [],
+  update(v, tr) {
+    if (tr.docChanged) v = v.flatMap(p => { const q = tr.changes.mapPos(p, 1, MapMode.TrackDel); return q == null ? [] : [q]; }); // shortcut: a position that no longer starts a block is only ignored, never pruned
+    for (const e of tr.effects) {
+      if (e.is(resetTables)) v = [];
+      if (e.is(toggleTable)) v = v.includes(e.value) ? v.filter(p => p !== e.value) : [...v, e.value];
+    }
+    return v;
+  },
+});
+const views = new Set<EditorView>();
+// the default changed (a command or the setting): every open editor drops its single states and rebuilds
+export const refreshTables = () => views.forEach(v => v.dispatch({ effects: resetTables.of(null) }));
+export class TableWidget extends WidgetType {
+  constructor(private t: Table, readonly folded = false) { super(); }
+  eq(o: TableWidget) { return o.folded === this.folded && JSON.stringify(o.t) === JSON.stringify(this.t); }
+  toDOM(view?: EditorView) {
     const el = (tag: string, cls = '', text = '') => { const e = document.createElement(tag); if (cls) e.className = cls; if (text) e.textContent = text; return e; };
     const box = el('div', 'dodo-src-block');
-    box.append(el('div', 'dodo-src-label', SRC_LABEL));
+    const head = el('button', 'dodo-src-head');
+    head.setAttribute('type', 'button'); head.setAttribute('aria-expanded', String(!this.folded)); head.setAttribute('title', SRC_LABEL);
+    head.append(el('span', 'dodo-src-mark', this.folded ? '▸' : '▾'), el('span', 'dodo-src-label', 'Tabell från Kursredan'));
+    if (this.folded && this.t.change) head.append(el('span', 'dodo-src-hint', this.t.change)); // news is not hidden by folding
+    head.onclick = () => {
+      if (!view) return;
+      const at = view.posAtDOM(box);
+      view.dispatch({ effects: toggleTable.of(at) });
+      // the rebuilt widget is a new element: give the focus back to its header
+      for (const b of Array.from(view.dom.querySelectorAll('.dodo-src-block'))) if (view.posAtDOM(b) === at) (b.firstElementChild as HTMLElement | null)?.focus();
+    };
+    box.append(head);
+    if (this.folded) return box;
     if (this.t.change) box.append(el('div', 'dodo-src-change', this.t.change));
     const table = el('table'), fill = (tr: HTMLElement, cells: Cell[], tag: string) => {
       for (const c of cells) {
@@ -70,7 +99,8 @@ class TableWidget extends WidgetType {
     const scroll = el('div', 'dodo-src-scroll'); scroll.append(table); box.append(scroll);
     return box;
   }
-  ignoreEvent() { return false; }
+  // the header handles its own clicks; the rest of the widget still lets the editor place the cursor
+  ignoreEvent(e: Event) { return !!(e.target as Element | null)?.closest?.('.dodo-src-head'); }
 }
 class Label extends WidgetType {
   constructor(private text: string) { super(); }
@@ -79,11 +109,12 @@ class Label extends WidgetType {
 }
 const SRC_LABEL = 'Från Kursredan, kan inte ändras här';
 // live: Live Preview, where a whole block is one table widget; otherwise (Source mode) raw lines with a muted background
-export function sourceDecos(doc: Text, live = false): DecorationSet {
+// open: the default (tables unfolded); toggled: start positions of the blocks that are the other way round
+export function sourceDecos(doc: Text, live = false, open = true, toggled: readonly number[] = []): DecorationSet {
   const b = new RangeSetBuilder<Decoration>();
   for (const [from, to] of sourceBlocks(doc)) {
     const t = live ? parseBlock(doc.sliceString(from, to).split('\n')) : null;
-    if (t) { b.add(from, to, Decoration.replace({ widget: new TableWidget(t), block: true })); continue; }
+    if (t) { b.add(from, to, Decoration.replace({ widget: new TableWidget(t, open === toggled.includes(from)), block: true })); continue; }
     for (let n = doc.lineAt(from).number; n <= doc.lineAt(to).number; n++) {
       const l = doc.line(n);
       b.add(l.from, l.from, Decoration.line({ class: 'dodo-src' }));
@@ -93,16 +124,17 @@ export function sourceDecos(doc: Text, live = false): DecorationSet {
   }
   return b.finish();
 }
-const sourceField = (live: (s: EditorState) => boolean) => StateField.define<DecorationSet>({
-  create: s => sourceDecos(s.doc, live(s)),
-  update: (v, tr) => (tr.docChanged || live(tr.state) !== live(tr.startState) ? sourceDecos(tr.state.doc, live(tr.state)) : v),
+const sourceField = (live: (s: EditorState) => boolean, open: (s: EditorState) => boolean) => StateField.define<DecorationSet>({
+  create: s => sourceDecos(s.doc, live(s), open(s), s.field(foldField)),
+  update: (v, tr) => (tr.docChanged || live(tr.state) !== live(tr.startState) || tr.effects.some(e => e.is(toggleTable) || e.is(resetTables)) ? sourceDecos(tr.state.doc, live(tr.state), open(tr.state), tr.state.field(foldField)) : v),
   provide: f => [EditorView.decorations.from(f),
     // the cursor steps over a table widget (nothing in it can be typed); the line decorations of Source mode are not atomic
     EditorView.atomicRanges.of(v => v.state.field(f).update({ filter: (_a, _b, d) => d.spec.widget instanceof TableWidget }))],
 });
 const TYPED = ['input', 'delete', 'move'];
 // live: tells whether a state is in Live Preview (main.ts passes Obsidian's editorLivePreviewField); without it every block is raw text
-export function sourceExtension(refused: () => void, live: (s: EditorState) => boolean = () => false): Extension {
+// open: tells whether tables are unfolded by default (main.ts passes the setting); without it they are
+export function sourceExtension(refused: () => void, live: (s: EditorState) => boolean = () => false, open: (s: EditorState) => boolean = () => true): Extension {
   const filter = EditorState.changeFilter.of(tr => {
     if (!tr.docChanged || !TYPED.some(e => tr.isUserEvent(e))) return true;
     const blocks = sourceBlocks(tr.startState.doc);
@@ -117,5 +149,6 @@ export function sourceExtension(refused: () => void, live: (s: EditorState) => b
     if (bad) refused();
     return !bad;
   });
-  return [sourceField(live), filter];
+  const reg = ViewPlugin.fromClass(class { constructor(private v: EditorView) { views.add(v); } destroy() { views.delete(this.v); } });
+  return [foldField, sourceField(live, open), filter, reg];
 }

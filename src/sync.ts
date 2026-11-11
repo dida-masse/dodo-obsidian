@@ -51,7 +51,7 @@ export function mendSource(local: string, server: string | undefined): string {
 }
 export interface Snap { me: string; users: any[]; headings: any[]; todos: any[]; comments?: any[]; keys?: any[]; shares?: any[] } // shares: the active public links (id, todo, expires), never their addresses
 export interface ListData { name: string; rev: number; text: string; snap: Snap; hide: boolean; off?: boolean; lost?: boolean }
-export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; seen: Record<string, string>; since: string; lists: Record<string, ListData>; fresh: Record<string, number>; tree?: Tree } // tree: dodo's folders as of the last sync
+export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; tablesOpen?: boolean; autoAdd: boolean; seen: Record<string, string>; since: string; lists: Record<string, ListData>; fresh: Record<string, number>; tree?: Tree } // tree: dodo's folders as of the last sync
 export interface SharedLink { id: string; todo: string | null; text: string | null; expires: string | null; opts: any; says: string; views: number; names: Record<string, string> }
 export interface SharedMine { id: string; name: string; people: { id: string; name: string; role: string }[]; links: SharedLink[] }
 export interface SharedIn { id: string; name: string; role: string; by: string[]; note: boolean; canLeave: boolean }
