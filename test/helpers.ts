@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Dodo, emptyData, freeName, listIdOf, type Data, type Host, type Http, type Note } from '../src/sync.js';
+import { Dodo, emptyData, freeName, listIdOf, tieOf, type Data, type Host, type Http, type Note } from '../src/sync.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../dodo/server.js');
@@ -50,22 +50,43 @@ export const writes = (log: Log) => log.filter(l => l.method !== 'GET');
 export class FakeVault implements Host {
   files = new Map<string, string>();
   notices: { text: string; action?: any; actions: any[] }[] = [];
-  private path(id: string) { return [...this.files].find(([, t]) => listIdOf(t.match(/^---\n[\s\S]*?^dodo:\s*(\S+)/m)?.[1]) === id)?.[0]; }
+  hidden = new Set<string>(); // files the metadata cache has not read yet: note() does not see them, copies() does (the real vault: cache first, disk when the cache has nothing)
+  trashed: string[] = []; // what was sent to the trash (the real one follows the user's setting; here it is just gone from files)
+  pins = new Map<string, string>(); // like main.ts's pinned: the file a list's note is until it is gone
+  private path(id: string) {
+    const pin = this.pins.get(id);
+    if (pin && this.files.has(pin)) return pin;
+    const p = this.find(id);
+    if (p) this.pins.set(id, p);
+    return p;
+  }
+  private find(id: string) { return [...this.files].find(([p, t]) => !this.hidden.has(p) && listIdOf(t.match(/^---\n[\s\S]*?^dodo:\s*(\S+)/m)?.[1]) === id)?.[0]; }
   note(id: string): Note | null {
     const p = this.path(id);
     return p ? { read: async () => this.files.get(p)!, replace: async (from, to) => { if (this.files.get(p) !== from) return false; this.files.set(p, to); return true; } } : null;
+  }
+  async copies(id: string) { return [...this.files].filter(([, t]) => tieOf(t) === id).map(([path]) => ({ path, read: async () => this.files.get(path)! })); }
+  typedIn = new Set<string>(); // paths the user has typed in this session (main.ts: the `typed` map); a restart is a new FakeVault state with this cleared
+  isTyped(path: string) { return this.typedIn.has(path); }
+  where(id: string) { return this.path(id) ?? null; }
+  adopt(id: string, path: string) { this.hidden.delete(path); this.pins.set(id, path); }
+  async trash(path: string) { this.files.delete(path); this.trashed.push(path); }
+  async aside(path: string, from: string, to: string, dir: string) {
+    if (this.files.get(path) !== from) return false;
+    this.files.delete(path); this.files.set(freeName(dir, path.split('/').pop()!.replace(/\.md$/, ''), p => this.exists(p)).path, to);
+    return true;
   }
   file(id: string) { return this.files.get(this.path(id)!)!; }
   edit(id: string, f: (t: string) => string) { this.files.set(this.path(id)!, f(this.file(id))); }
   async move(id: string, dir: string) {
     const from = this.path(id)!, stem = from.split('/').pop()!.replace(/\.md$/, '');
     const to = freeName(dir, stem, p => this.exists(p)).path;
-    this.files.set(to, this.files.get(from)!); this.files.delete(from);
+    this.files.set(to, this.files.get(from)!); this.files.delete(from); this.pins.set(id, to);
   }
   async rename(id: string, stem: string) {
     const from = this.path(id)!, dir = from.split('/').slice(0, -1).join('/');
     const to = freeName(dir, stem, p => p !== from && this.exists(p)).path;
-    const t = this.files.get(from)!; this.files.delete(from); this.files.set(to, t);
+    const t = this.files.get(from)!; this.files.delete(from); this.files.set(to, t); this.pins.set(id, to);
   }
   base(id: string) { const p = this.path(id); return p ? p.split('/').pop()!.replace(/\.md$/, '') : null; }
   folders = new Set<string>(); // folders made on their own (empty ones); the others follow from the files
