@@ -28,6 +28,17 @@ Sessionen sparas bara i pluginets egna data (`data.json`), aldrig i anteckningar
 - Period: `^2026-11-20..2026-11-22` eller `^fredag..söndag` sätter ett slutdatum (en period över flera dagar), som i dodo; kombinerbart med klockslag (`^fredag..söndag 14:30-10:00` är start första dagen och slut sista dagen). Tar du bort slutet i anteckningen tas det bort i dodo, och startdatumet står kvar. Kräver dodo från 2026-11-08.
 - Inställningen *Dölj klara uppgifter* tar bort dem ur anteckningen utan att ta bort dem i dodo.
 
+## Mappar
+
+dodos mappar för listor (de du har lagt dina listor i på webben) blir riktiga mappar i `dodo/`: en lista i *HT26* under *Kurser* ligger som `dodo/Kurser/HT26/DA101.md`. Det gäller åt båda hållen.
+
+- Flyttas en lista i dodo flyttas filen vid nästa synk. Flyttar du filen till en annan mapp i Obsidian flyttas listan i dodo. Ny mapp, omdöpt mapp och borttagen mapp följer också med åt båda håll.
+- En mapp som tas bort tar aldrig med sig något: innehållet hamnar en nivå upp, i dodo och i Obsidian. En tom mapp finns kvar i dodo tills någon tar bort den.
+- Pluginet hämtar alltid dodos senaste träd först och ändrar bara det du ändrat i Obsidian, så en ändring på webben skrivs inte över. Har du och webben flyttat samma lista åt olika håll vinner dodo och filen flyttas.
+- Tecken som inte går i filnamn (`/ \ : * ? " < > |`) blir mellanrum. Två mappar med samma namn på samma nivå heter `Namn` och `Namn (2)` i valvet. dodo tillåter högst 5 nivåer och 60 tecken i ett mappnamn: lägger du en anteckning djupare får du en notis och den hamnar på femte nivån.
+- Ordningen på mappar och listor följer inte med: Obsidian sorterar efter namn, och ordningen skrivs aldrig tillbaka.
+- Första gången följer filerna dodo: ligger dina anteckningar platt i `dodo/` flyttas de till sina mappar. Kräver en dodo med mappar (dida-masse/dodo#119).
+
 ## Det som inte finns i anteckningen
 
 Kommentarer skrivs aldrig in i anteckningen, och inte heller vem som bockade av och när eller historiken. De finns kvar i dodo och påverkas inte av att anteckningen skrivs om.

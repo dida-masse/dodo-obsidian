@@ -1,6 +1,7 @@
 // The sync core: no `obsidian` import. Network, notes and dialogs come in through small interfaces, so the tests run it with Node's fetch and a fake vault.
 // The text rules (md.js) and the way a changed document becomes API calls are the web page's (public/index.html, openDoc) and tui.js's editAll.
 import { loadMd, type Md } from './md.js';
+import { mergeFolders, pathsOf, type Tree } from './folders.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type HttpReq = { method: string; url: string; headers: Record<string, string>; body?: string };
@@ -18,6 +19,10 @@ export interface Host {
   move(listId: string, dir: string): Promise<void>; // the note goes into `dir` under a free name; links follow
   rename(listId: string, stem: string): Promise<void>; // the note gets a new free name in its folder; links follow
   base(listId: string): string | null; // the note's file name without .md
+  dir(listId: string): string | null; // the folder the note is in ('' = the vault's root)
+  dirs(root: string): string[]; // every folder below `root` (not the hidden ones)
+  mkdir(path: string): Promise<void>;
+  prune(path: string): Promise<void>; // removes the folder if it is empty, otherwise leaves it
   viewing?(listId: string): boolean; // the note is in front of the user right now
   create(path: string, text: string): Promise<Note>;
   notice(text: string, ...actions: { label: string; run: () => void }[]): void;
@@ -39,7 +44,7 @@ export function mendSource(local: string, server: string | undefined): string {
 }
 export interface Snap { me: string; users: any[]; headings: any[]; todos: any[]; comments?: any[]; keys?: any[] }
 export interface ListData { name: string; rev: number; text: string; snap: Snap; hide: boolean; off?: boolean; lost?: boolean }
-export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; seen: Record<string, string>; since: string; lists: Record<string, ListData>; fresh: Record<string, number> }
+export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; seen: Record<string, string>; since: string; lists: Record<string, ListData>; fresh: Record<string, number>; tree?: Tree } // tree: dodo's folders as of the last sync
 export const emptyData = (): Data => ({ url: '', session: '', name: '', folder: 'dodo', hideDone: false, autoAdd: true, seen: {}, since: '', lists: {}, fresh: {} });
 
 // a callout at the top of a note whose list is gone (the server says 404 both when it was deleted and when you were taken out of it)
@@ -273,6 +278,7 @@ export class Dodo {
   // a message from the event stream: a list changed, or lists were added or taken away
   event(name: string, d: any) {
     if (name === 'rev' && d?.list && this.data.lists[d.list]) void this.cycle(d.list, false).then(() => this.flushNews());
+    else if (name === 'folders') void this.folders();
     else if (name === 'lists') { void this.addNew(true); for (const id of Object.keys(this.data.lists)) void this.cycle(id, false); } // a deleted list is noticed at once
   }
   // lists the server has that the vault has never seen are turned on; a list switched off stays off; a renamed list renames its note
@@ -296,10 +302,38 @@ export class Dodo {
         try { await this.enable(l.id); this.onLists(); } finally { this.adding.delete(l.id); }
       }
       this.errs.delete('lists');
+      await this.folders();
     } catch (e: any) {
       if (e.status === 401) await this.fail('lists', null, null, e); else if (!e.offline) this.errs.set('lists', e.message || String(e));
       this.update();
     }
+  }
+  // ---- folders (#19) ----
+  // dodo's tree and the vault's folders are made one: what changed in the vault since the last sync is laid on dodo's newest tree, then the vault follows the result
+  async folders() {
+    if (!this.data.session || this.authLost) return;
+    return this.locked('folders', async () => {
+      const h = this.d.host, root = this.data.folder.replace(/^\/+|\/+$/g, ''), up = (p: string) => root ? p.slice(root.length + 1) : p, down = (p: string) => [root, p].filter(Boolean).join('/');
+      const inside = (p: string) => !root || p === root || p.startsWith(root + '/'), aside = (p: string) => p === ASIDE || p.startsWith(ASIDE + '/');
+      try {
+        const srv = (await this.call('GET', '/api/folders')) as Tree, lists: Record<string, string> = {};
+        for (const [id, l] of Object.entries(this.data.lists)) { const d = l.off || l.lost ? null : h.dir(id); if (d != null && inside(d) && !aside(up(d))) lists[id] = up(d); }
+        const dirs = h.dirs(root).filter(inside).map(up).filter(d => d && !aside(d));
+        const { tree, notes } = mergeFolders(this.data.tree ?? null, srv, { dirs, lists }, uid);
+        notes.forEach(n => h.notice(n));
+        const T = JSON.stringify(tree) === JSON.stringify(srv) ? srv : (await this.call('PUT', '/api/folders', tree)) as Tree;
+        const was = pathsOf(this.data.tree ?? T), now = pathsOf(T), have = new Set(dirs.map(d => d.toLowerCase())), want = (id: string) => (T.lists[id] ? now.get(T.lists[id]) ?? '' : '');
+        for (const p of now.values()) if (!have.has(p.toLowerCase())) await h.mkdir(down(p));
+        for (const id of Object.keys(lists)) if (lists[id].toLowerCase() !== want(id).toLowerCase()) await h.move(id, down(want(id)));
+        const kept = new Set([...now.values()].map(p => p.toLowerCase()));
+        for (const p of [...was.values()].filter(p => !kept.has(p.toLowerCase())).sort((a, b) => b.split('/').length - a.split('/').length)) await h.prune(down(p)); // a folder gone from dodo, once emptied
+        this.data.tree = T; await this.d.save();
+        this.errs.delete('folders');
+      } catch (e: any) {
+        if (e.status === 401) await this.fail('folders', null, null, e); else if (!e.offline && e.status !== 404) this.errs.set('folders', e.message || String(e)); // 404: a server without folders
+      }
+      this.update();
+    });
   }
   flush(id: string) { return this.cycle(id, true).then(() => this.flushNews()); }
 

@@ -1,5 +1,5 @@
 // The Obsidian side: vault, editor, settings and timers around the sync core (sync.ts).
-import { FuzzySuggestModal, MarkdownView, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, normalizePath, requestUrl, type Editor, type MarkdownFileInfo } from 'obsidian';
+import { FuzzySuggestModal, MarkdownView, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, TFolder, normalizePath, requestUrl, type Editor, type MarkdownFileInfo } from 'obsidian';
 import { CommentsView, newsLine, VIEW } from './panel.js';
 import { marksExtension, refreshMarks } from './marks.js';
 import { sourceExtension } from './source.js';
@@ -42,6 +42,7 @@ export default class DodoPlugin extends Plugin implements Host {
   private indexed = false;
   private up = false;
   private poll?: number;
+  private folderTimer?: number;
   private dots?: HTMLStyleElement;
 
   async onload() {
@@ -87,8 +88,9 @@ export default class DodoPlugin extends Plugin implements Host {
 
     this.registerEvent(this.app.workspace.on('editor-change', (_e: Editor, info: MarkdownFileInfo) => { if (info.file) { this.typed.set(info.file.path, Date.now()); this.changed(info.file); } }));
     this.registerEvent(this.app.vault.on('modify', f => { if (f instanceof TFile) this.changed(f); }));
-    this.registerEvent(this.app.vault.on('rename', f => { this.paintDots(); const id = f instanceof TFile ? this.idOf(f) : null; if (id) void this.dodo.noteRenamed(id); }));
-    this.registerEvent(this.app.vault.on('delete', f => { for (const [id, t] of this.pinned) if (t === f) this.pinned.delete(id); }));
+    this.registerEvent(this.app.vault.on('rename', f => { this.paintDots(); const id = f instanceof TFile ? this.idOf(f) : null; if (id) void this.dodo.noteRenamed(id); if (id || f instanceof TFolder) this.foldersSoon(); }));
+    this.registerEvent(this.app.vault.on('create', f => { if (f instanceof TFolder) this.foldersSoon(); }));
+    this.registerEvent(this.app.vault.on('delete', f => { for (const [id, t] of this.pinned) if (t === f) this.pinned.delete(id); if (f instanceof TFolder) this.foldersSoon(); }));
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => { // leaving a note sends it at once
       const prev = this.last, now = this.app.workspace.getActiveFile();
       if (prev && prev !== now) { const id = this.idOf(prev); if (id) { void this.dodo.flush(id); void this.dodo.left(id); } }
@@ -105,7 +107,7 @@ export default class DodoPlugin extends Plugin implements Host {
     this.registerDomEvent(document, 'visibilitychange', () => { if (!document.hidden) { this.openedActive(); void this.tick(); } });
     this.app.workspace.onLayoutReady(() => { this.last = this.app.workspace.getActiveFile(); this.openStream(); this.paintDots(); void this.tick(); });
   }
-  onunload() { this.dots?.remove(); window.clearTimeout(this.poll); this.stream?.close(); for (const t of this.timers.values()) window.clearTimeout(t); }
+  onunload() { this.dots?.remove(); window.clearTimeout(this.poll); window.clearTimeout(this.folderTimer); this.stream?.close(); for (const t of this.timers.values()) window.clearTimeout(t); }
 
   // desktop only: the server says at once when something changes (requestUrl cannot stream, so Node's http is used)
   openStream() {
@@ -118,6 +120,11 @@ export default class DodoPlugin extends Plugin implements Host {
       onEvent: (name, d) => this.dodo.event(name, d) });
   }
 
+  // a note or folder was moved, made or removed in the vault: dodo hears of it when the moving has stopped (the plugin's own moves come back here and change nothing)
+  private foldersSoon() {
+    window.clearTimeout(this.folderTimer);
+    this.folderTimer = window.setTimeout(() => { if (this.indexed) void this.dodo.folders(); }, 1500);
+  }
   private async tick() {
     if (this.ticking || !this.data.session || !this.indexed) return;
     this.ticking = true;
@@ -229,7 +236,7 @@ export default class DodoPlugin extends Plugin implements Host {
   async move(id: string, dir: string) {
     const file = this.fileFor(id);
     if (!file) return;
-    if (!this.app.vault.getAbstractFileByPath(dir)) await this.app.vault.createFolder(dir).catch(() => {});
+    await this.mkdir(dir);
     await this.app.fileManager.renameFile(file, normalizePath(freeName(dir, file.basename, p => this.exists(p)).path)); // links follow
   }
   async rename(id: string, stem: string) {
@@ -238,6 +245,16 @@ export default class DodoPlugin extends Plugin implements Host {
     const dir = file.parent && !file.parent.isRoot() ? file.parent.path : '', self = file.path.toLowerCase();
     await this.app.fileManager.renameFile(file, normalizePath(freeName(dir, stem, p => p.toLowerCase() !== self && this.exists(p)).path)); // links follow
   }
+  dir(id: string) { const p = this.fileFor(id)?.parent; return p ? (p.isRoot() ? '' : p.path) : null; }
+  dirs(root: string) {
+    const under = root ? root + '/' : '';
+    return this.app.vault.getAllLoadedFiles().filter((f): f is TFolder => f instanceof TFolder && !f.isRoot() && f.path.startsWith(under) && !f.path.split('/').some(s => s.startsWith('.'))).map(f => f.path);
+  }
+  async mkdir(path: string) { // one level at a time: the parents are made too
+    let at = '';
+    for (const s of path.split('/').filter(Boolean)) { at = at ? at + '/' + s : s; if (!this.app.vault.getAbstractFileByPath(at)) await this.app.vault.createFolder(at).catch(() => {}); }
+  }
+  async prune(path: string) { const f = this.app.vault.getAbstractFileByPath(path); if (f instanceof TFolder && !f.children.length) await this.app.fileManager.trashFile(f).catch(() => {}); }
   base(id: string) { return this.fileFor(id)?.basename ?? null; }
   viewing(id: string) { const f = this.fileFor(id); return !!f && !document.hidden && this.app.workspace.getActiveFile() === f; }
   exists(path: string) { const l = path.toLowerCase(); return this.app.vault.getAllLoadedFiles().some(f => f.path.toLowerCase() === l); }
