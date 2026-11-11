@@ -23,3 +23,10 @@
 .dodo-link:hover { text-decoration: underline; }
 .dodo-src { background: color-mix(in srgb, var(--text-muted) 8%, transparent); color: var(--text-muted); }
 .dodo-src-label { font-size: var(--font-ui-smaller); color: var(--text-faint); font-style: italic; }
+/* a course's table in Live Preview: one widget per block, lined up with the todo's notes, scrolling sideways inside its own box */
+.dodo-src-block { margin: 2px 0 6px var(--list-indent, 2em); max-width: calc(100% - var(--list-indent, 2em)); }
+.dodo-src-scroll { overflow-x: auto; max-width: 100%; }
+.dodo-src-block table { border-collapse: collapse; font-size: var(--font-smaller); }
+.dodo-src-block th, .dodo-src-block td { border: var(--table-border-width, 1px) solid var(--background-modifier-border); padding: 2px 8px; white-space: nowrap; }
+.dodo-src-block th { background: var(--background-secondary); text-align: left; }
+.dodo-src-change { font-size: var(--font-ui-smaller); color: var(--text-muted); }

@@ -1,5 +1,5 @@
 // The Obsidian side: vault, editor, settings and timers around the sync core (sync.ts).
-import { FuzzySuggestModal, MarkdownView, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, TFolder, normalizePath, requestUrl, type Editor, type MarkdownFileInfo } from 'obsidian';
+import { FuzzySuggestModal, MarkdownView, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, TFolder, editorLivePreviewField, normalizePath, requestUrl, type Editor, type MarkdownFileInfo } from 'obsidian';
 import { CommentsView, newsLine, VIEW } from './panel.js';
 import { marksExtension, refreshMarks } from './marks.js';
 import { sourceExtension } from './source.js';
@@ -73,7 +73,7 @@ export default class DodoPlugin extends Plugin implements Host {
       moved: (file, text, line) => this.cursorAt(file, text, line),
     }));
     let told = false; // once a session is enough: the label in the note says it too
-    this.registerEditorExtension(sourceExtension(() => { if (!told) { told = true; new Notice('dodo: tabellen kommer från Kursredan och kan inte ändras här. Din egen text skriver du under den.'); } }));
+    this.registerEditorExtension(sourceExtension(() => { if (!told) { told = true; new Notice('dodo: tabellen kommer från Kursredan och kan inte ändras här. Din egen text skriver du under den.'); } }, s => s.field(editorLivePreviewField, false) ?? false));
     const tab = new Settings(this);
     this.dodo.onLists = () => { if (tab.containerEl.isConnected) tab.display(); }; // an open settings tab is not left showing old toggles
     this.addSettingTab(tab);

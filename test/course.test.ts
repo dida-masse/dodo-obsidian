@@ -152,3 +152,27 @@ test('the editor: the marker block is found, typing inside it is refused, deleti
   assert.notEqual(at(0, 66, '', 'delete.selection'), doc, 'the whole course away: allowed');
   assert.notEqual(at(30, 30, 'x', 'set'), doc, 'the plugin\'s own writes carry no user event and pass');
 });
+
+test('the editor: a block is parsed into a table, and shown as one widget in Live Preview and as today\'s lines in Source mode', async () => {
+  const { Text } = await import('@codemirror/state');
+  const { parseBlock, sourceDecos } = await import('../src/source.js');
+  const blk = (...l: string[]) => ['  <!-- dodo:källa -->', ...l, '', '  <!-- /dodo:källa -->'];
+  const c = (text: string, bold = false, old?: string) => ({ text, bold, ...(old != null ? { old } : {}) });
+  const plain = parseBlock(blk('  |  | Typ | P |', '  |---|---|---|', '  | **ABC12** | Campus | 10 |', '  | **Totalt** |  | 20 |'));
+  assert.deepEqual(plain, { head: [c(''), c('Typ'), c('P')], rows: [[c('ABC12', true), c('Campus'), c('10')], [c('Totalt', true), c(''), c('20')]] }, 'several rows, empty cells');
+  const ch = parseBlock(blk('  *2026-11-05 14:10:* R: 10 → 20 (ABC12)', '', '  |  | R |', '  |---|---|', '  | **ABC12** | **20** ← 10 |'));
+  assert.equal(ch?.change, '2026-11-05 14:10: R: 10 → 20 (ABC12)');
+  assert.deepEqual(ch?.rows, [[c('ABC12', true), c('20', true, '10')]]);
+  assert.deepEqual(parseBlock(blk('  |  | a\\|b | c\\\\d | &lt;i> |', '  |---|---|---|---|', '  | **x\\|y** | **&lt;b>** ← \\\\ | 1 | 2 |'))?.rows,
+    [[c('x|y', true), c('<b>', true, '\\'), c('1'), c('2')]], 'escapes undone exactly as the server does them');
+  assert.deepEqual(parseBlock(blk('  |  | a\\|b | c\\\\d | &lt;i> |', '  |---|---|---|---|', '  | x | y | z | w |'))?.head, [c(''), c('a|b'), c('c\\d'), c('<i>')]);
+  assert.equal(parseBlock(['  <!-- dodo:källa -->', '  | a |', '  <!-- /dodo:källa -->']), null, 'no separator or rows: nothing');
+  assert.equal(parseBlock(['  <!-- dodo:källa -->', '  |  | a |', '  |---|---|', '  <!-- /dodo:källa -->']), null, 'no rows: nothing');
+  assert.equal(parseBlock(['  |  | a |', '  |---|---|', '  | x | 1 |', '  <!-- /dodo:källa -->']), null, 'a marker missing: nothing');
+  const doc = Text.of(['- [ ] DV1', ...blk('  |  | R |', '  |---|---|', '  | **A** | 1 |'), '  min text', '- [ ] DV2', '  <!-- dodo:källa -->', '  | oskadad |', '  <!-- /dodo:källa -->']);
+  const kinds = (live: boolean) => { const out: string[] = []; const it = sourceDecos(doc, live).iter(); for (; it.value; it.next()) out.push(it.value.spec.widget ? it.value.spec.widget.constructor.name + (it.value.spec.block ? ':block' : '') : 'line'); return out; };
+  assert.equal(kinds(true).filter(k => k === 'TableWidget:block').length, 1, 'the complete block is a widget in Live Preview');
+  assert.equal(kinds(true).filter(k => k === 'line').length, 3, 'a damaged table (no rows) is raw lines');
+  assert.equal(kinds(false).filter(k => k === 'TableWidget:block').length, 0, 'Source mode: no widget');
+  assert.equal(kinds(false).filter(k => k === 'line').length, 9, 'Source mode: a muted line each, as before');
+});
