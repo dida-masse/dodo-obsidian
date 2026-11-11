@@ -162,7 +162,7 @@ export class Dodo {
     Object.assign(this.data, { session: '', name: '' });
     await this.d.save();
   }
-  async lists(): Promise<{ id: string; name: string; changed?: boolean }[]> { return (await this.call('GET', '/api/lists')).lists; }
+  async lists(): Promise<{ id: string; name: string; changed?: boolean; role?: string }[]> { return (await this.call('GET', '/api/lists')).lists; }
 
   // ---- the state of a list, and its text ----
   // null = nothing changed since `rev`
@@ -497,6 +497,39 @@ export class Dodo {
     Object.assign(ld, { rev: S2.rev, snap: this.snap(S2) });
     await this.d.save();
     this.onSnap(id);
+  }
+
+  // ---- copy a todo to another list (#14) ----
+  // the lists a todo can be copied to: the ones I am a member in (and so can write in), except the one it is in
+  async copyTargets(id: string) { return (await this.lists()).filter(l => l.id !== id); }
+  // the todo on `line` (0-based, in the whole file) of the note becomes a new, separate todo in list `to`, under a heading of the same title if it has one
+  async copyTodo(id: string, line: number, to: string): Promise<{ list: string; id: string; name: string }> {
+    const ld = this.data.lists[id], note = this.d.host.note(id);
+    if (!ld || ld.off || ld.lost || !note) throw new Error('Anteckningen hålls inte i takt med någon dodo-lista.');
+    if (to === id) throw new Error('Välj en annan lista än den uppgiften redan ligger i.');
+    let file = await note.read();
+    if (split(file).text !== ld.text) { // unsent edits go first, so the line is a todo dodo knows
+      const was = file.split('\n')[line];
+      await this.flush(id);
+      file = await note.read();
+      if (split(file).text !== ld.text) throw new Error('Anteckningen har ändringar som inte har kunnat skickas än. Vänta in synken och försök igen.');
+      if (file.split('\n')[line] !== was) throw new Error('Anteckningen ändrades medan den skickades. Försök igen.');
+    }
+    const at = this.todoAt(id, file, line);
+    if (!at) throw new Error('Markören står inte på en uppgift.');
+    if (at.kind === 'heading') throw new Error('Det är en rubrik. Ställ markören på en uppgift.');
+    if (at.kind === 'block') throw new Error('Det är ett textstycke, inte en uppgift. Ställ markören på en uppgift.');
+    if (!at.id) throw new Error('Uppgiften är inte skickad till dodo än. Vänta in synken och försök igen.');
+    const t = ld.snap.todos.find(x => x.id === at.id);
+    if (!t) throw new Error('Uppgiften finns inte i dodo längre.');
+    let T: any;
+    try { T = await this.call('GET', `/api/l/${encodeURIComponent(to)}/state`); } catch (e: any) { throw e.status === 403 || e.status === 404 ? new Error('Du är inte med i den listan, så du kan inte skriva i den.') : e; }
+    const src = ld.snap.headings.find(x => x.id === t.h), h = (src && T.headings.find((x: any) => String(x.title).trim() === String(src.title).trim())?.id) ?? null;
+    const r = await this.call('POST', `/api/l/${id}/todos/${at.id}/copy`, h ? { to, h } : { to });
+    const name = String(T.list?.name ?? to), text = t.text.length > 60 ? t.text.slice(0, 59) + '…' : t.text;
+    this.d.host.notice(`dodo: kopierade »${text}« till »${name}«.`);
+    if (this.data.lists[to] && !this.data.lists[to].off) void this.flush(to); // its note is filled in now, not at the next sync
+    return { list: r.list, id: r.id, name };
   }
 
   // ---- comments ----

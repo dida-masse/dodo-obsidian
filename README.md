@@ -48,6 +48,12 @@ Kommentarer skrivs aldrig in i anteckningen, och inte heller vem som bockade av 
 
 Kommandot *dodo: Visa kommentarer* (eller ikonen i vänsterkanten) öppnar en sidopanel med kommentarerna på uppgiften där markören står: författare, tid och text (markdown), svar indragna under tråden, lösta trådar ihopvikta. Längst ner skriver du en ny kommentar (Ctrl/Cmd+Enter skickar), och *Svara* finns på varje kommentar. Rader med kommentarer får en liten *💬 n* sist på raden (bara en markering i editorn, inte text i filen); den är färgad när någon annan har skrivit något du inte har sett, och ett klick öppnar panelen. När någon annan kommenterar får du en notis. En rad du precis har skrivit och som inte är skickad än har inga kommentarer.
 
+## Kopiera en uppgift till en annan lista
+
+Kommandot *dodo: Kopiera uppgiften till en annan lista…* kopierar uppgiften där markören står (med deluppgifter) till en annan av dina listor, som du väljer ur en lista. Kopian är en ny, fristående uppgift: den får egna id och tar inte med kommentarer, länkar eller källa, och personer som inte är med i den andra listan tas bort. Finns en rubrik med samma namn i målet hamnar kopian under den, annars utan rubrik. Uppgiften i den här listan är orörd, och du får en notis med målets namn. Ligger målet också som anteckning fylls den på direkt.
+
+Osända ändringar i anteckningen skickas först, så rätt uppgift kopieras. Kommandot säger ifrån (i stället för att kopiera fel) om markören står på en rubrik, ett textstycke eller en rad som inte har kunnat skickas. Kräver dodo från dida-masse/dodo#103.
+
 ## Kurslistor
 
 En kurslista (dodo #38) har en uppgift per kurs, hämtad från Kursredan. Den är en vanlig dodo-lista i Obsidian, med några skillnader:

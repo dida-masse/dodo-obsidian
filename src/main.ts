@@ -74,6 +74,12 @@ export default class DodoPlugin extends Plugin implements Host {
     const tab = new Settings(this);
     this.dodo.onLists = () => { if (tab.containerEl.isConnected) tab.display(); }; // an open settings tab is not left showing old toggles
     this.addSettingTab(tab);
+    this.addCommand({ id: 'copy-todo', name: 'Kopiera uppgiften till en annan lista…', editorCheckCallback: (check, editor, ctx) => {
+      const id = ctx.file && this.idOf(ctx.file);
+      if (!id || !this.data.lists[id] || !this.data.session) return false;
+      if (!check) void this.copyTodo(id, editor.getCursor().line);
+      return true;
+    } });
     this.addCommand({ id: 'add-list', name: 'Lägg till lista', callback: () => this.addList() });
     // a held mass deletion in the active note (sync.ts, massDelete): the commands only show while there is one
     const held = (send: boolean) => (check: boolean) => {
@@ -162,6 +168,13 @@ export default class DodoPlugin extends Plugin implements Host {
       const open = (await this.dodo.lists()).filter(l => !this.data.lists[l.id] || this.data.lists[l.id].off);
       if (!open.length) return void new Notice('Alla dina listor finns redan som anteckningar.');
       new Pick(this.app, open, l => this.enable(l.id)).open();
+    } catch (e) { new Notice('dodo: ' + (e as Error).message); }
+  }
+  async copyTodo(id: string, line: number) {
+    try {
+      const to = await this.dodo.copyTargets(id);
+      if (!to.length) return void new Notice('Du är inte med i någon annan lista att kopiera till.');
+      new Pick(this.app, to, l => void this.dodo.copyTodo(id, line, l.id).catch(e => new Notice('dodo: ' + (e as Error).message))).open();
     } catch (e) { new Notice('dodo: ' + (e as Error).message); }
   }
   async enable(id: string) {
