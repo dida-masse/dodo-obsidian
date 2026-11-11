@@ -25,6 +25,11 @@ export interface Host {
   prune(path: string): Promise<void>; // removes the folder if it is empty, otherwise leaves it
   viewing?(listId: string): boolean; // the note is in front of the user right now
   create(path: string, text: string): Promise<Note>;
+  // every note whose frontmatter ties it to the list, wherever it lies: files the metadata cache has not read yet are read from disk (note() only sees what the cache knows)
+  copies(listId: string): Promise<{ path: string; read(): Promise<string> }[]>;
+  adopt(listId: string, path: string): void; // this file is the list's note from now on (note(), base(), dir() answer for it)
+  trash(path: string): Promise<void>; // through the user's trash setting, never a hard delete
+  aside(path: string, from: string, to: string, dir: string): Promise<boolean>; // writes `to` if the file still is `from`, then moves it into `dir` under a free name
   notice(text: string, ...actions: { label: string; run: () => void }[]): void;
 }
 // one line of "new since last time" from the server (GET /news): a todo added, changed, done or deleted, or someone who came or went
@@ -54,6 +59,9 @@ export const emptyData = (): Data => ({ url: '', session: '', name: '', folder: 
 export const LOST_TITLE = '> [!warning] Listan finns inte längre i dodo';
 export const lostNote = (name: string, day: string) => `${LOST_TITLE}\n> »${name}« är borttagen i dodo, eller så är du inte med i den längre (${day}). Anteckningen hålls inte i takt längre, men texten finns kvar här.`;
 export const ASIDE = 'Borttagna';
+// a second note for a list that holds text of its own: its tie (`dodo:`) is cut and it goes aside with a line at the top
+export const COPY_TITLE = '> [!warning] Det här är en andra kopia av en dodo-lista';
+export const copyNote = (kept: string) => `${COPY_TITLE}\n> Listan hålls i takt i ${kept}. Den här anteckningen hålls inte i takt längre, men texten finns kvar här.`;
 export const SEND_MS = 1000; // quiet after typing before it is sent
 // a note whose changes would delete this many of the list's todos is held back: more likely a misread note (a ~~~ in a mail signature once swallowed 62 todos) than a cleanup
 export const massDelete = (gone: number, total: number) => gone >= 10 || (gone >= 3 && gone * 2 > total);
@@ -75,6 +83,8 @@ const toFile = (head: string, text: string) => head + (text ? text + '\n' : '');
 const squash = (s: string) => s.split('\n').map(l => l.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 // the list a note belongs to, from its `dodo:` frontmatter value (https://host/l/<id>)
 export const listIdOf = (v: unknown) => (typeof v === 'string' ? v.match(/\/l\/([A-Za-z0-9_-]+)\/?\s*$/)?.[1] ?? null : null);
+// the list a file belongs to by its frontmatter, read from the text itself (for files the metadata cache has not read)
+export const tieOf = (file: string) => listIdOf(split(file).head.match(/^dodo:[ \t]*(\S+)/m)?.[1]);
 // where each item of a docPlan starts (line index in the document text). A todo or block knows its lines; a heading goes on to the next item's first line.
 const TODO_LINE = /^(?:[-*+]|\d+[.)])\s+\[[ xX]\]/, FENCE_LINE = /^\s*(```|~~~)/;
 export function spans(plan: any[], lines: string[]): number[] {
@@ -192,6 +202,7 @@ export class Dodo {
   // ---- lists on or off ----
   async enable(id: string) {
     const h = this.d.host, old = this.data.lists[id];
+    await this.dedupe(id); // a note that exists but is not in the cache yet is found before anything is made
     if (old && h.note(id)) { old.off = false; old.lost = false; await this.d.save(); return this.flush(id); }
     const S = (await this.state(id))!, hide = this.data.hideDone, text = this.render(S, hide);
     const there = h.note(id);
@@ -210,6 +221,38 @@ export class Dodo {
     await this.loadSays(id, S);
     await this.d.save();
   }
+  // ---- two notes for one list ----
+  // A file sync can deliver a second note for a list (made by another device, or moved there by it). Every device must keep the same one,
+  // so the rule uses only what the shared vault and dodo's tree say: first the note lying where the tree says the list belongs, then the plain
+  // name before »Name 2«, then the smallest path. A copy with nothing of its own (same text as the kept note, or as the last synced text) goes to the trash;
+  // a copy with other text is never removed or overwritten: it loses its tie, gets a line at the top and goes to Borttagna.
+  keepOrder(id: string, paths: string[]): string[] {
+    const t = this.data.tree, f = t?.lists[id], root = this.data.folder.replace(/^\/+|\/+$/g, '');
+    const want = [root, f && t ? pathsOf(t).get(f) ?? '' : ''].filter(Boolean).join('/').toLowerCase();
+    const key = (p: string) => [p.slice(0, Math.max(0, p.lastIndexOf('/'))).toLowerCase() === want ? 0 : 1, / \d+\.md$/.test(p) ? 1 : 0] as const;
+    return [...paths].sort((a, b) => key(a)[0] - key(b)[0] || key(a)[1] - key(b)[1] || (a.replace(/\.md$/, '') < b.replace(/\.md$/, '') ? -1 : a === b ? 0 : 1));
+  }
+  async dedupe(id: string) {
+    return this.locked(id, async () => {
+      const h = this.d.host, ld = this.data.lists[id], all = await h.copies(id);
+      if (!all.length) return;
+      const order = this.keepOrder(id, all.map(c => c.path)), keep = all.find(c => c.path === order[0])!;
+      h.adopt(id, keep.path);
+      if (ld?.lost) return;
+      const kept = squash(split(await keep.read()).text);
+      for (const c of order.slice(1).map(p => all.find(c => c.path === p)!)) {
+        const file = await c.read().catch(() => null);
+        if (file == null) continue;
+        const text = squash(split(file).text);
+        if (text === kept || (ld && text === squash(ld.text))) { await h.trash(c.path).catch(() => {}); continue; }
+        const { head } = split(file), cut = head.replace(/^dodo:/m, 'dodo-kopia:');
+        if (await h.aside(c.path, file, cut + copyNote(keep.path) + '\n\n' + file.slice(head.length), this.asideDir()).catch(() => false))
+          h.notice(`dodo: »${keep.path}« och »${c.path}« var två anteckningar för samma lista och hade olika text. »${keep.path}« är listans anteckning. »${c.path}« är lagd i ${this.asideDir()} med en rad överst. Texten finns kvar i båda.`);
+      }
+    });
+  }
+  // at start, once the vault is indexed
+  async dedupeAll() { await Promise.all(Object.keys(this.data.lists).map(id => this.dedupe(id))); }
   // the list got a new name in dodo: the note follows, unless it was given a name of its own in Obsidian
   private async renamed(id: string, ld: ListData, name: string) {
     const base = this.d.host.base(id);

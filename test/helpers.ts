@@ -5,7 +5,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Dodo, emptyData, freeName, listIdOf, type Data, type Host, type Http, type Note } from '../src/sync.js';
+import { Dodo, emptyData, freeName, listIdOf, tieOf, type Data, type Host, type Http, type Note } from '../src/sync.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const SERVER = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../dodo/server.js');
@@ -50,10 +50,20 @@ export const writes = (log: Log) => log.filter(l => l.method !== 'GET');
 export class FakeVault implements Host {
   files = new Map<string, string>();
   notices: { text: string; action?: any; actions: any[] }[] = [];
-  private path(id: string) { return [...this.files].find(([, t]) => listIdOf(t.match(/^---\n[\s\S]*?^dodo:\s*(\S+)/m)?.[1]) === id)?.[0]; }
+  hidden = new Set<string>(); // files the metadata cache has not read yet: note() does not see them, copies() does (the real vault: cache first, disk when the cache has nothing)
+  trashed: string[] = []; // what was sent to the trash (the real one follows the user's setting; here it is just gone from files)
+  private path(id: string) { return [...this.files].find(([p, t]) => !this.hidden.has(p) && listIdOf(t.match(/^---\n[\s\S]*?^dodo:\s*(\S+)/m)?.[1]) === id)?.[0]; }
   note(id: string): Note | null {
     const p = this.path(id);
     return p ? { read: async () => this.files.get(p)!, replace: async (from, to) => { if (this.files.get(p) !== from) return false; this.files.set(p, to); return true; } } : null;
+  }
+  async copies(id: string) { return [...this.files].filter(([, t]) => tieOf(t) === id).map(([path]) => ({ path, read: async () => this.files.get(path)! })); }
+  adopt(_id: string, path: string) { this.hidden.delete(path); } // the real one pins the file; here it is visible to note() from now on
+  async trash(path: string) { this.files.delete(path); this.trashed.push(path); }
+  async aside(path: string, from: string, to: string, dir: string) {
+    if (this.files.get(path) !== from) return false;
+    this.files.delete(path); this.files.set(freeName(dir, path.split('/').pop()!.replace(/\.md$/, ''), p => this.exists(p)).path, to);
+    return true;
   }
   file(id: string) { return this.files.get(this.path(id)!)!; }
   edit(id: string, f: (t: string) => string) { this.files.set(this.path(id)!, f(this.file(id))); }

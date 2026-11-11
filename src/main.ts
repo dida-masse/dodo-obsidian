@@ -5,7 +5,7 @@ import { marksExtension, refreshMarks } from './marks.js';
 import { sourceExtension } from './source.js';
 import { SharedModal } from './shares.js';
 import { nodeStream, type Stream } from './events.js';
-import { Dodo, emptyData, freeName, listIdOf, minimalChange, SEND_MS, type Data, type Host, type Http, type Note } from './sync.js';
+import { Dodo, emptyData, freeName, listIdOf, minimalChange, SEND_MS, tieOf, type Data, type Host, type Http, type Note } from './sync.js';
 
 const POLL_MS = 2000, SAFETY_MS = 30000, QUIET_MS = 2000; // polling every 2 s, or every 30 s while the event stream is up
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -99,7 +99,8 @@ export default class DodoPlugin extends Plugin implements Host {
     this.registerEvent(this.app.workspace.on('editor-change', (_e: Editor, info: MarkdownFileInfo) => { if (info.file) { this.typed.set(info.file.path, Date.now()); this.changed(info.file); } }));
     this.registerEvent(this.app.vault.on('modify', f => { if (f instanceof TFile) this.changed(f); }));
     this.registerEvent(this.app.vault.on('rename', f => { this.paintDots(); const id = f instanceof TFile ? this.idOf(f) : null; if (id) void this.dodo.noteRenamed(id); if (id || f instanceof TFolder) this.foldersSoon(); }));
-    this.registerEvent(this.app.vault.on('create', f => { if (f instanceof TFolder) this.foldersSoon(); }));
+    this.registerEvent(this.app.vault.on('create', f => { if (f instanceof TFolder) this.foldersSoon(); else void this.seen(f); }));
+    this.registerEvent(this.app.metadataCache.on('changed', f => void this.seen(f))); // a file the sync delivered, once its frontmatter is read
     this.registerEvent(this.app.vault.on('delete', f => { for (const [id, t] of this.pinned) if (t === f) this.pinned.delete(id); if (f instanceof TFolder) this.foldersSoon(); }));
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => { // leaving a note sends it at once
       const prev = this.last, now = this.app.workspace.getActiveFile();
@@ -110,12 +111,12 @@ export default class DodoPlugin extends Plugin implements Host {
     }));
     // notes are found by their frontmatter: before the cache has read every file an existing note looks missing, and a second one would be made
     const mc = this.app.metadataCache as typeof this.app.metadataCache & { resolved?: boolean }; // not in the typings: unknown means go on as before
-    if (mc.resolved !== false) this.indexed = true; else this.registerEvent(mc.on('resolved', () => { if (!this.indexed) { this.indexed = true; this.paintDots(); } }));
+    if (mc.resolved !== false) this.indexed = true; else this.registerEvent(mc.on('resolved', () => { if (!this.indexed) { this.indexed = true; this.paintDots(); void this.dodo.dedupeAll(); } }));
     const loop = () => { this.poll = window.setTimeout(() => { void this.tick().finally(loop); }, this.up ? SAFETY_MS : POLL_MS); };
     loop();
     this.registerDomEvent(window, 'focus', () => void this.tick());
     this.registerDomEvent(document, 'visibilitychange', () => { if (!document.hidden) { this.openedActive(); void this.tick(); } });
-    this.app.workspace.onLayoutReady(() => { this.last = this.app.workspace.getActiveFile(); this.openStream(); this.paintDots(); void this.tick(); });
+    this.app.workspace.onLayoutReady(() => { this.last = this.app.workspace.getActiveFile(); this.openStream(); this.paintDots(); if (this.indexed) void this.dodo.dedupeAll(); void this.tick(); });
   }
   onunload() { this.dots?.remove(); window.clearTimeout(this.poll); window.clearTimeout(this.folderTimer); this.stream?.close(); for (const t of this.timers.values()) window.clearTimeout(t); }
 
@@ -200,6 +201,12 @@ export default class DodoPlugin extends Plugin implements Host {
   private idOf(file: TFile): string | null {
     for (const [id, f] of this.pinned) if (f === file) return id;
     return listIdOf(this.app.metadataCache.getFileCache(file)?.frontmatter?.dodo);
+  }
+  // a note that is new or changed and ties to a list whose note is another file: two notes for one list
+  private async seen(f: unknown) {
+    if (!this.indexed || !(f instanceof TFile) || f.extension !== 'md') return;
+    const c = this.app.metadataCache.getFileCache(f), id = c ? listIdOf(c.frontmatter?.dodo) : tieOf(await this.app.vault.cachedRead(f).catch(() => ''));
+    if (id && this.data.lists[id] && this.pinned.get(id) !== f) void this.dodo.dedupe(id);
   }
   private fileFor(id: string): TFile | null {
     const p = this.pinned.get(id);
@@ -286,6 +293,28 @@ export default class DodoPlugin extends Plugin implements Host {
     const file = await this.app.vault.create(path, text);
     this.pinned.set(listIdOf(text.match(/^dodo:\s*(\S+)/m)?.[1])!, file);
     return this.note(listIdOf(text.match(/^dodo:\s*(\S+)/m)?.[1])!)!;
+  }
+  async copies(id: string) {
+    const out: { path: string; read(): Promise<string> }[] = [], vault = this.app.vault;
+    for (const f of vault.getMarkdownFiles()) {
+      const c = this.app.metadataCache.getFileCache(f);
+      if (c ? listIdOf(c.frontmatter?.dodo) !== id : tieOf(await vault.cachedRead(f).catch(() => '')) !== id) continue;
+      out.push({ path: f.path, read: async () => this.editorOf(f)?.getValue() ?? await vault.read(f) }); // the editor has the newest text
+    }
+    return out;
+  }
+  adopt(id: string, path: string) { const f = this.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) this.pinned.set(id, f); }
+  async trash(path: string) { const f = this.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) await this.app.fileManager.trashFile(f); }
+  async aside(path: string, from: string, to: string, dir: string) {
+    const f = this.app.vault.getAbstractFileByPath(path);
+    if (!(f instanceof TFile)) return false;
+    let ok = false;
+    await this.app.vault.process(f, data => (ok = data === from) ? to : data);
+    if (!ok) return false;
+    for (const [id, p] of this.pinned) if (p === f) this.pinned.delete(id);
+    await this.mkdir(dir);
+    await this.app.fileManager.renameFile(f, normalizePath(freeName(dir, f.basename, p => this.exists(p)).path));
+    return true;
   }
   notice(text: string, ...actions: { label: string; run: () => void }[]) {
     if (!actions.length) return void new Notice(text, 8000);
