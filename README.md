@@ -54,6 +54,15 @@ Kommandot *dodo: Kopiera uppgiften till en annan lista…* kopierar uppgiften d�
 
 Osända ändringar i anteckningen skickas först, så rätt uppgift kopieras. Kommandot säger ifrån (i stället för att kopiera fel) om markören står på en rubrik, ett textstycke eller en rad som inte har kunnat skickas. Kräver dodo från dida-masse/dodo#103.
 
+## Delningar
+
+- **Markering på raden.** En uppgift med en aktiv publik länk får en liten *🔗 n* sist på raden, efter 💬 (bara en markering i editorn, inte text i filen). Pekar du på den står det vad länken tillåter, och ett klick öppnar *Delningar*. Länkar till hela listan har ingen rad att sitta på och syns bara i *Delningar*.
+- **Kommandot *dodo: Delningar…*** visar det du delar i listor du driver (personer och publika länkar) och listorna du är med i, som webbens *Delningar*. Bara det du får göra visas: som admin finns *Ta bort* för personer, *Ändra* och *Stoppa länken* för länkar; som medlem finns bara *Lämna listan*. En listas enda admin kan inte lämna den (gör först någon annan till admin i dodo).
+- **Ändra en länk.** *Ändra* öppnar knappar för vad länken visar (datum, prioritet, taggar, vem, anteckning, klara, kommentarer) och om besökaren får bocka av, lägga till (bara länkar till hela listan), kommentera och skriva i anteckningen. Hur länge länken gäller går inte att ändra, inte heller i dodo.
+- **Stoppa länken, ta bort en person och lämna en lista** frågar alltid först, på en egen sida som säger exakt vad som stoppas eller lämnas, och *Avbryt* är det som är markerat. Lämnar du en lista skickas det du har skrivit först, sedan flyttas anteckningen till `dodo/Borttagna/` med en rad överst om att du har lämnat listan; texten finns kvar i filen men hålls inte längre i takt.
+- Länkarnas adresser och nycklar hämtas, visas och sparas aldrig av pluginet: inte i anteckningar, inte i pluginets data, inte i notiser eller felmeddelanden. Vill du ha adressen, kopiera den i dodo.
+- **Finns inte här:** att skapa en ny länk och att kopiera adressen (görs i dodo), och en egen notis när någon besöker en länk (kommentarsnotisen finns redan).
+
 ## Kurslistor
 
 En kurslista (dodo #38) har en uppgift per kurs, hämtad från Kursredan. Den är en vanlig dodo-lista i Obsidian, med några skillnader:

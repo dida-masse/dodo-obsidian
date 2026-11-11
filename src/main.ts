@@ -3,6 +3,7 @@ import { FuzzySuggestModal, MarkdownView, Notice, Platform, Plugin, PluginSettin
 import { CommentsView, newsLine, VIEW } from './panel.js';
 import { marksExtension, refreshMarks } from './marks.js';
 import { sourceExtension } from './source.js';
+import { SharedModal } from './shares.js';
 import { nodeStream, type Stream } from './events.js';
 import { Dodo, emptyData, freeName, listIdOf, minimalChange, SEND_MS, type Data, type Host, type Http, type Note } from './sync.js';
 
@@ -65,6 +66,8 @@ export default class DodoPlugin extends Plugin implements Host {
     this.addRibbonIcon('message-square', 'dodo: Visa kommentarer', () => void this.showPanel());
     this.registerEditorExtension(marksExtension({
       news: (file, text) => { const id = this.idOf(file); return id && this.data.lists[id] ? this.dodo.newsLines(id, text) : []; },
+      shares: (file, text) => { const id = this.idOf(file); return id && this.data.lists[id] ? this.dodo.shareLines(id, text) : []; },
+      share: () => this.openShared(),
       marks: (file, text) => { const id = this.idOf(file); return id && this.data.lists[id] ? this.dodo.commentLines(id, text) : []; },
       open: (file, todo) => { const id = this.idOf(file); if (id) void this.showPanel().then(() => this.panels().forEach(p => p.show(id, todo))); },
       moved: (file, text, line) => this.cursorAt(file, text, line),
@@ -80,6 +83,7 @@ export default class DodoPlugin extends Plugin implements Host {
       if (!check) void this.copyTodo(id, editor.getCursor().line);
       return true;
     } });
+    this.addCommand({ id: 'shared', name: 'Delningar…', callback: () => this.openShared() });
     this.addCommand({ id: 'add-list', name: 'Lägg till lista', callback: () => this.addList() });
     // a held mass deletion in the active note (sync.ts, massDelete): the commands only show while there is one
     const held = (send: boolean) => (check: boolean) => {
@@ -169,6 +173,10 @@ export default class DodoPlugin extends Plugin implements Host {
       if (!open.length) return void new Notice('Alla dina listor finns redan som anteckningar.');
       new Pick(this.app, open, l => this.enable(l.id)).open();
     } catch (e) { new Notice('dodo: ' + (e as Error).message); }
+  }
+  private openShared() {
+    if (!this.data.session) { new Notice('Logga in på dodo i inställningarna först.'); return this.openSettings(); }
+    new SharedModal(this.app, this.dodo).open();
   }
   async copyTodo(id: string, line: number) {
     try {
