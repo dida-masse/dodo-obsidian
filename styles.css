@@ -29,4 +29,8 @@
 .dodo-src-block table { border-collapse: collapse; font-size: var(--font-smaller); }
 .dodo-src-block th, .dodo-src-block td { border: var(--table-border-width, 1px) solid var(--background-modifier-border); padding: 2px 8px; white-space: nowrap; }
 .dodo-src-block th { background: var(--background-secondary); text-align: left; }
+.dodo-src-head { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 32px; padding: 2px 4px; background: none; border: none; box-shadow: none; cursor: pointer; text-align: left; color: var(--text-faint); font-size: var(--font-ui-smaller); }
+.dodo-src-head:hover, .dodo-src-head:focus-visible { color: var(--text-muted); background: var(--background-modifier-hover); }
+.dodo-src-mark { flex: none; width: 1em; }
+.dodo-src-hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-accent); font-style: normal; }
 .dodo-src-change { font-size: var(--font-ui-smaller); color: var(--text-muted); }

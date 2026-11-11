@@ -2,7 +2,7 @@
 import { FuzzySuggestModal, MarkdownView, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, TFolder, editorLivePreviewField, normalizePath, requestUrl, type Editor, type MarkdownFileInfo } from 'obsidian';
 import { CommentsView, newsLine, VIEW } from './panel.js';
 import { marksExtension, refreshMarks } from './marks.js';
-import { sourceExtension } from './source.js';
+import { refreshTables, sourceExtension } from './source.js';
 import { SharedModal } from './shares.js';
 import { nodeStream, type Stream } from './events.js';
 import { Dodo, emptyData, freeName, listIdOf, minimalChange, SEND_MS, tieOf, type Data, type Host, type Http, type Note } from './sync.js';
@@ -73,7 +73,9 @@ export default class DodoPlugin extends Plugin implements Host {
       moved: (file, text, line) => this.cursorAt(file, text, line),
     }));
     let told = false; // once a session is enough: the label in the note says it too
-    this.registerEditorExtension(sourceExtension(() => { if (!told) { told = true; new Notice('dodo: tabellen kommer från Kursredan och kan inte ändras här. Din egen text skriver du under den.'); } }, s => s.field(editorLivePreviewField, false) ?? false));
+    this.registerEditorExtension(sourceExtension(() => { if (!told) { told = true; new Notice('dodo: tabellen kommer från Kursredan och kan inte ändras här. Din egen text skriver du under den.'); } }, s => s.field(editorLivePreviewField, false) ?? false, () => !!this.data.tablesOpen));
+    for (const [id, name, open] of [['open-tables', 'Fäll ut alla kurstabeller', true], ['close-tables', 'Fäll ihop alla kurstabeller', false]] as const)
+      this.addCommand({ id, name, callback: () => { this.data.tablesOpen = open; void this.saveData(this.data); refreshTables(); } });
     const tab = new Settings(this);
     this.dodo.onLists = () => { if (tab.containerEl.isConnected) tab.display(); }; // an open settings tab is not left showing old toggles
     this.addSettingTab(tab);
@@ -348,6 +350,8 @@ class Settings extends PluginSettingTab {
       .addToggle(t => t.setValue(data.autoAdd).onChange(async v => { data.autoAdd = v; await this.p.saveData(data); }));
     new Setting(el).setName('Dölj klara uppgifter').setDesc('De finns kvar i dodo, bara inte i anteckningen.')
       .addToggle(t => t.setValue(data.hideDone).onChange(async v => { data.hideDone = v; await this.p.saveData(data); void this.p.dodo.tick(); }));
+    new Setting(el).setName('Kurstabeller: utfällda som standard').setDesc('Av: tabellerna i kurslistor är ihopfällda tills du klickar på dem.')
+      .addToggle(t => t.setValue(!!data.tablesOpen).onChange(async v => { data.tablesOpen = v; await this.p.saveData(data); refreshTables(); }));
     new Setting(el).setName('Listor').setHeading();
     const box = el.createDiv();
     box.setText('Hämtar listor …');

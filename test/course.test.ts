@@ -176,3 +176,55 @@ test('the editor: a block is parsed into a table, and shown as one widget in Liv
   assert.equal(kinds(false).filter(k => k === 'TableWidget:block').length, 0, 'Source mode: no widget');
   assert.equal(kinds(false).filter(k => k === 'line').length, 9, 'Source mode: a muted line each, as before');
 });
+
+test('the editor: tables fold one by one or by default, the single states follow the text, and Source mode is the same whatever they are', async () => {
+  const { EditorState, Text } = await import('@codemirror/state');
+  const { EditorView } = await import('@codemirror/view');
+  const { sourceExtension, sourceBlocks, TableWidget, toggleTable, resetTables } = await import('../src/source.js');
+  const blk = (r: string, ...pre: string[]) => ['  <!-- dodo:källa -->', ...pre, '  |  | R |', '  |---|---|', `  | **A** | ${r} |`, '  <!-- /dodo:källa -->'];
+  const lines = ['- [ ] DV1', ...blk('1', '  *2026-11-05 14:10:* R: 1 → 2 (A)', ''), '- [ ] DV2', ...blk('2'), '- [ ] DV3', ...blk('3')];
+  const text = lines.join('\n');
+  let open = false, live = true;
+  const mk = () => EditorState.create({ doc: text, extensions: sourceExtension(() => {}, () => live, () => open) });
+  const sets = (st: any) => st.facet(EditorView.decorations).filter((d: any) => typeof d !== 'function') as any[];
+  const folds = (st: any) => { const out: boolean[] = []; for (const set of sets(st)) for (const it = set.iter(); it.value; it.next()) if (it.value.spec.widget instanceof TableWidget) out.push(it.value.spec.widget.folded); return out; };
+  const lineDecos = (st: any) => { let n = 0; for (const set of sets(st)) for (const it = set.iter(); it.value; it.next()) if (it.value.spec.class === 'dodo-src') n++; return n; };
+  let st = mk();
+  assert.deepEqual(folds(st), [true, true, true], 'default folded: every block');
+  open = true; assert.deepEqual(folds(mk()), [false, false, false], 'default unfolded');
+  assert.deepEqual(folds(EditorState.create({ doc: text, extensions: sourceExtension(() => {}, () => true) })), [false, false, false], 'no default given: unfolded as before');
+  open = false;
+  const [a, b, c] = sourceBlocks(st.doc).map(x => x[0]);
+  st = st.update({ effects: toggleTable.of(b) }).state;
+  assert.deepEqual(folds(st), [true, false, true], 'toggling one block changes only that block');
+  const above = st.update({ changes: { from: 0, insert: 'En rad ovanför\n' } }).state;
+  assert.deepEqual(folds(above), [true, false, true], 'still toggled after an edit above');
+  const below = above.update({ changes: { from: above.doc.length, insert: '\n  mer text' } }).state;
+  assert.deepEqual(folds(below), [true, false, true], 'and after text appended below');
+  assert.deepEqual(folds(st.update({ effects: toggleTable.of(b) }).state), [true, true, true], 'toggled back');
+  assert.deepEqual(folds(st.update({ effects: toggleTable.of(a) }).state), [false, false, true], 'a second one');
+  assert.deepEqual(folds(st.update({ effects: resetTables.of(null) }).state), [true, true, true], 'reset clears the single states');
+  open = true; // the default changed: the reset applies it to every block
+  assert.deepEqual(folds(st.update({ effects: resetTables.of(null) }).state), [false, false, false]);
+  open = false; live = false;
+  assert.equal(lineDecos(mk()), 7 + 5 + 5, 'Source mode: lines as before');
+  assert.equal(lineDecos(mk().update({ effects: toggleTable.of(b) }).state), lineDecos(mk()), 'whatever the fold states');
+  assert.deepEqual(folds(mk()), [], 'and no widget');
+  void c;
+  // the header, with a tiny fake document: a real button's attributes, and the hint only while folded with news
+  const mkEl = (tag: string): any => ({ tag, className: '', textContent: '', attrs: {} as Record<string, string>, kids: [] as any[], setAttribute(k: string, v: string) { this.attrs[k] = v; }, append(...k: any[]) { this.kids.push(...k); }, firstElementChild: null });
+  (globalThis as any).document = { createElement: mkEl, createTextNode: (t: string) => ({ text: t }) };
+  const { parseBlock } = await import('../src/source.js');
+  const t = parseBlock(lines.slice(1, 8))!;
+  const all = (e: any): any[] => [e, ...(e.kids ?? []).flatMap(all)];
+  for (const folded of [true, false]) {
+    const dom = new TableWidget(t, folded).toDOM() as any;
+    const head = dom.kids[0];
+    assert.equal(head.tag, 'button'); assert.equal(head.attrs.type, 'button'); assert.equal(head.attrs['aria-expanded'], String(!folded));
+    assert.equal(all(dom).some(e => e.tag === 'table'), !folded, 'folded: no table');
+    assert.equal(all(head).some(e => e.className === 'dodo-src-hint' && e.textContent.startsWith('2026-11-05')), folded, 'the change is the hint only when folded');
+    assert.equal(all(dom).some(e => e.className === 'dodo-src-change'), !folded, 'unfolded: the change line as before');
+  }
+  assert.notEqual(new TableWidget(t, true).eq(new TableWidget(t, false)), true, 'a fold state change rebuilds the widget');
+  delete (globalThis as any).document;
+});
