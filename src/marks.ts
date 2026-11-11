@@ -8,8 +8,10 @@ import { editorInfoField, type TFile } from 'obsidian';
 
 export interface MarkHost {
   marks(file: TFile, text: string): { line: number; id: string; n: number; fresh: boolean }[];
+  shares(file: TFile, text: string): { line: number; id: string; n: number; says: string }[];
   news(file: TFile, text: string): number[];
   open(file: TFile, todo: string): void;
+  share(file: TFile): void;
   moved(file: TFile, text: string, line: number): void;
 }
 
@@ -23,6 +25,22 @@ class Mark extends WidgetType {
     el.setAttribute('aria-label', 'Visa kommentarer');
     el.onmousedown = e => e.preventDefault(); // keeps the caret where it was
     el.onclick = () => this.open(this.id);
+    return el;
+  }
+  ignoreEvent() { return true; }
+}
+
+// "🔗 n" after the comment mark: the todo has n active public links; the tooltip says what they allow (never the address)
+class Link extends WidgetType {
+  constructor(private n: number, private says: string, private open: () => void) { super(); }
+  eq(o: Link) { return o.n === this.n && o.says === this.says; }
+  toDOM() {
+    const el = document.createElement('span');
+    el.className = 'dodo-mark';
+    el.textContent = `🔗 ${this.n}`;
+    el.title = el.ariaLabel = `Delad med en publik länk${this.n > 1 ? ` (${this.n})` : ''}${this.says ? ': ' + this.says : ''}. Klicka för Delningar.`;
+    el.onmousedown = e => e.preventDefault();
+    el.onclick = () => this.open();
     return el;
   }
   ignoreEvent() { return true; }
@@ -58,6 +76,7 @@ export function marksExtension(h: MarkHost): Extension {
       const all: [number, number, Decoration][] = [];
       for (const n of h.news(file, text)) if (n < doc.lines) all.push([doc.line(n + 1).from, 0, Decoration.line({ class: 'dodo-news-line' })]);
       for (const m of h.marks(file, text)) if (m.line < doc.lines) all.push([doc.line(m.line + 1).to, 1, Decoration.widget({ widget: new Mark(m.n, m.fresh, m.id, id => h.open(file, id)), side: 1 })]);
+      for (const m of h.shares(file, text)) if (m.line < doc.lines) all.push([doc.line(m.line + 1).to, 2, Decoration.widget({ widget: new Link(m.n, m.says, () => h.share(file)), side: 2 })]);
       for (const [at, , d] of all.sort((a, b) => a[0] - b[0] || a[1] - b[1])) b.add(at, at, d);
       this.view.dispatch({ effects: set.of(b.finish()) });
     }

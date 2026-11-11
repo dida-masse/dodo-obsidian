@@ -1,6 +1,7 @@
 // The sync core: no `obsidian` import. Network, notes and dialogs come in through small interfaces, so the tests run it with Node's fetch and a fake vault.
 // The text rules (md.js) and the way a changed document becomes API calls are the web page's (public/index.html, openDoc) and tui.js's editAll.
 import { loadMd, type Md } from './md.js';
+import { mergeFolders, pathsOf, type Disk, type Tree } from './folders.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type HttpReq = { method: string; url: string; headers: Record<string, string>; body?: string };
@@ -18,6 +19,10 @@ export interface Host {
   move(listId: string, dir: string): Promise<void>; // the note goes into `dir` under a free name; links follow
   rename(listId: string, stem: string): Promise<void>; // the note gets a new free name in its folder; links follow
   base(listId: string): string | null; // the note's file name without .md
+  dir(listId: string): string | null; // the folder the note is in ('' = the vault's root)
+  dirs(root: string): string[]; // every folder below `root` (not the hidden ones)
+  mkdir(path: string): Promise<void>;
+  prune(path: string): Promise<void>; // removes the folder if it is empty, otherwise leaves it
   viewing?(listId: string): boolean; // the note is in front of the user right now
   create(path: string, text: string): Promise<Note>;
   notice(text: string, ...actions: { label: string; run: () => void }[]): void;
@@ -37,9 +42,12 @@ export function mendSource(local: string, server: string | undefined): string {
   const rest = local.split('\n').filter(l => !l.includes(SRC_OPEN) && !l.includes(SRC_CLOSE) && !own.has(l.trim())).join('\n').trim();
   return block + (rest ? '\n\n' + rest : '');
 }
-export interface Snap { me: string; users: any[]; headings: any[]; todos: any[]; comments?: any[]; keys?: any[] }
+export interface Snap { me: string; users: any[]; headings: any[]; todos: any[]; comments?: any[]; keys?: any[]; shares?: any[] } // shares: the active public links (id, todo, expires), never their addresses
 export interface ListData { name: string; rev: number; text: string; snap: Snap; hide: boolean; off?: boolean; lost?: boolean }
-export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; seen: Record<string, string>; since: string; lists: Record<string, ListData>; fresh: Record<string, number> }
+export interface Data { url: string; session: string; name: string; folder: string; hideDone: boolean; autoAdd: boolean; seen: Record<string, string>; since: string; lists: Record<string, ListData>; fresh: Record<string, number>; tree?: Tree } // tree: dodo's folders as of the last sync
+export interface SharedLink { id: string; todo: string | null; text: string | null; expires: string | null; opts: any; says: string; views: number; names: Record<string, string> }
+export interface SharedMine { id: string; name: string; people: { id: string; name: string; role: string }[]; links: SharedLink[] }
+export interface SharedIn { id: string; name: string; role: string; by: string[]; note: boolean; canLeave: boolean }
 export const emptyData = (): Data => ({ url: '', session: '', name: '', folder: 'dodo', hideDone: false, autoAdd: true, seen: {}, since: '', lists: {}, fresh: {} });
 
 // a callout at the top of a note whose list is gone (the server says 404 both when it was deleted and when you were taken out of it)
@@ -157,7 +165,7 @@ export class Dodo {
     Object.assign(this.data, { session: '', name: '' });
     await this.d.save();
   }
-  async lists(): Promise<{ id: string; name: string; changed?: boolean }[]> { return (await this.call('GET', '/api/lists')).lists; }
+  async lists(): Promise<{ id: string; name: string; changed?: boolean; role?: string }[]> { return (await this.call('GET', '/api/lists')).lists; }
 
   // ---- the state of a list, and its text ----
   // null = nothing changed since `rev`
@@ -168,9 +176,9 @@ export class Dodo {
     const canon = (w: string) => (w[0] === '@' ? (d.users.find((u: any) => u.handle === w.slice(1)) || { id: w }).id : w);
     for (const x of [...d.headings, ...d.todos, ...d.todos.flatMap((t: any) => t.subs)]) x.who = [...new Set((x.who || []).map(canon))];
     d.todos.sort((a: any, b: any) => this.md.ordKey(a) - this.md.ordKey(b));
-    return { rev: d.rev, me: d.me, users: d.users, headings: d.headings, todos: d.todos, comments: d.comments || [], keys: d.keys || [], list: d.list };
+    return { rev: d.rev, me: d.me, users: d.users, headings: d.headings, todos: d.todos, comments: d.comments || [], keys: d.keys || [], shares: d.shares || [], list: d.list };
   }
-  private snap = (S: Snap): Snap => ({ me: S.me, users: S.users, headings: S.headings, todos: S.todos, comments: S.comments, keys: S.keys });
+  private snap = (S: Snap): Snap => ({ me: S.me, users: S.users, headings: S.headings, todos: S.todos, comments: S.comments, keys: S.keys, shares: S.shares });
   // the list as the document items docPlan compares with (done todos left out when they are hidden: they are not "removed" either)
   private items(S: Snap, hide: boolean): any[] {
     this.users.length = 0; this.users.push(...S.users);
@@ -191,6 +199,7 @@ export class Dodo {
       const file = await there.read(), { head } = split(file);
       if (split(file).text !== text) await there.replace(file, toFile(head, text));
       this.data.lists[id] = { name: S.list.name, rev: S.rev, text, snap: this.snap(S), hide };
+      await this.loadSays(id, S);
       return this.d.save();
     }
     const stem = fileName(S.list.name), dir = this.data.folder.replace(/^\/+|\/+$/g, '');
@@ -198,6 +207,7 @@ export class Dodo {
     await h.create(path, toFile(`---\ndodo: ${this.data.url}/l/${id}\n---\n`, text));
     if (n > 1) h.notice(`Det fanns redan en fil med det namnet, så anteckningen heter ${path.split('/').pop()}.`);
     this.data.lists[id] = { name: S.list.name, rev: S.rev, text, snap: this.snap(S), hide };
+    await this.loadSays(id, S);
     await this.d.save();
   }
   // the list got a new name in dodo: the note follows, unless it was given a name of its own in Obsidian
@@ -273,6 +283,7 @@ export class Dodo {
   // a message from the event stream: a list changed, or lists were added or taken away
   event(name: string, d: any) {
     if (name === 'rev' && d?.list && this.data.lists[d.list]) void this.cycle(d.list, false).then(() => this.flushNews());
+    else if (name === 'folders') void this.folders();
     else if (name === 'lists') { void this.addNew(true); for (const id of Object.keys(this.data.lists)) void this.cycle(id, false); } // a deleted list is noticed at once
   }
   // lists the server has that the vault has never seen are turned on; a list switched off stays off; a renamed list renames its note
@@ -296,10 +307,51 @@ export class Dodo {
         try { await this.enable(l.id); this.onLists(); } finally { this.adding.delete(l.id); }
       }
       this.errs.delete('lists');
+      await this.folders();
     } catch (e: any) {
       if (e.status === 401) await this.fail('lists', null, null, e); else if (!e.offline) this.errs.set('lists', e.message || String(e));
       this.update();
     }
+  }
+  // ---- folders (#19) ----
+  // dodo's tree and the vault's folders are made one: what changed in the vault since the last sync is laid on dodo's newest tree, then the vault follows the result
+  // a removal of more than half of dodo's folders is more likely a vault that is not there yet (not synced down on this computer) than a cleanup: it waits for the user, like massDelete for notes
+  heldFolders: Disk | null = null;
+  async releaseFolders(send: boolean) {
+    const disk = this.heldFolders; this.heldFolders = null;
+    if (disk && send) await this.folders(disk); // the vault as it was then, and this time the removal is sent
+  }
+  async folders(held?: Disk) {
+    if (!this.data.session || this.authLost) return;
+    return this.locked('folders', async () => {
+      const h = this.d.host, root = this.data.folder.replace(/^\/+|\/+$/g, ''), up = (p: string) => root ? p.slice(root.length + 1) : p, down = (p: string) => [root, p].filter(Boolean).join('/');
+      const inside = (p: string) => !root || p === root || p.startsWith(root + '/'), aside = (p: string) => p === ASIDE || p.startsWith(ASIDE + '/');
+      try {
+        const srv = (await this.call('GET', '/api/folders')) as Tree, lists: Record<string, string> = {};
+        for (const [id, l] of Object.entries(this.data.lists)) { const d = l.off || l.lost ? null : h.dir(id); if (d != null && inside(d) && !aside(up(d))) lists[id] = up(d); }
+        const dirs = h.dirs(root).filter(inside).map(up).filter(d => d && !aside(d));
+        const absent = Object.entries(this.data.lists).filter(([id, l]) => !l.off && !l.lost && h.dir(id) == null).map(([id]) => id);
+        const disk = held ?? { dirs, lists, absent, strict: !root };
+        let { tree, notes, wanted } = mergeFolders(this.data.tree ?? null, srv, disk, uid);
+        notes.forEach(n => h.notice(n));
+        if (!held && wanted >= 2 && wanted * 2 > (this.data.tree?.folders.length ?? 0)) { // nothing is removed in dodo: the vault follows dodo, and the user is asked
+          tree = srv;
+          if (!this.heldFolders) h.notice(`dodo: ${wanted} av ${this.data.tree!.folders.length} mappar skulle tas bort i dodo, så ingen mapp är borttagen. Mapparna läggs tillbaka i valvet. Är det meningen att de ska bort?`, { label: 'Ta bort ändå', run: () => void this.releaseFolders(true) }, { label: 'Hämta från dodo', run: () => void this.releaseFolders(false) });
+          this.heldFolders = disk;
+        }
+        const T = JSON.stringify(tree) === JSON.stringify(srv) ? srv : (await this.call('PUT', '/api/folders', tree)) as Tree;
+        const was = pathsOf(this.data.tree ?? T), now = pathsOf(T), have = new Set(dirs.map(d => d.toLowerCase())), want = (id: string) => (T.lists[id] ? now.get(T.lists[id]) ?? '' : '');
+        for (const p of now.values()) if (!have.has(p.toLowerCase())) await h.mkdir(down(p));
+        for (const id of Object.keys(lists)) if (lists[id].toLowerCase() !== want(id).toLowerCase()) await h.move(id, down(want(id)));
+        const kept = new Set([...now.values()].map(p => p.toLowerCase()));
+        for (const p of [...was.values()].filter(p => !kept.has(p.toLowerCase())).sort((a, b) => b.split('/').length - a.split('/').length)) await h.prune(down(p)); // a folder gone from dodo, once emptied
+        this.data.tree = T; await this.d.save();
+        this.errs.delete('folders');
+      } catch (e: any) {
+        if (e.status === 401) await this.fail('folders', null, null, e); else if (!e.offline && e.status !== 404) this.errs.set('folders', e.message || String(e)); // 404: a server without folders
+      }
+      this.update();
+    });
   }
   flush(id: string) { return this.cycle(id, true).then(() => this.flushNews()); }
 
@@ -348,6 +400,7 @@ export class Dodo {
     else if (wrote) { this.data.fresh[id] = Date.now(); this.onFresh(); } // my own edits never come back this way: what I sent already matches
     this.news(ld.snap, S);
     Object.assign(ld, { rev: S.rev, snap: this.snap(S), hide });
+    await this.loadSays(id, S);
     await this.d.save();
     this.onSnap(id);
   }
@@ -448,8 +501,42 @@ export class Dodo {
     else ld.text = (await note.replace(f2, toFile(cur2.head, c))) ? c : text;
     this.news(ld.snap, S2);
     Object.assign(ld, { rev: S2.rev, snap: this.snap(S2) });
+    await this.loadSays(id, S2);
     await this.d.save();
     this.onSnap(id);
+  }
+
+  // ---- copy a todo to another list (#14) ----
+  // the lists a todo can be copied to: the ones I am a member in (and so can write in), except the one it is in
+  async copyTargets(id: string) { return (await this.lists()).filter(l => l.id !== id); }
+  // the todo on `line` (0-based, in the whole file) of the note becomes a new, separate todo in list `to`, under a heading of the same title if it has one
+  async copyTodo(id: string, line: number, to: string): Promise<{ list: string; id: string; name: string }> {
+    const ld = this.data.lists[id], note = this.d.host.note(id);
+    if (!ld || ld.off || ld.lost || !note) throw new Error('Anteckningen hålls inte i takt med någon dodo-lista.');
+    if (to === id) throw new Error('Välj en annan lista än den uppgiften redan ligger i.');
+    let file = await note.read();
+    if (split(file).text !== ld.text) { // unsent edits go first, so the line is a todo dodo knows
+      const was = file.split('\n')[line];
+      await this.flush(id);
+      file = await note.read();
+      if (split(file).text !== ld.text) throw new Error('Anteckningen har ändringar som inte har kunnat skickas än. Vänta in synken och försök igen.');
+      if (file.split('\n')[line] !== was) throw new Error('Anteckningen ändrades medan den skickades. Försök igen.');
+    }
+    const at = this.todoAt(id, file, line);
+    if (!at) throw new Error('Markören står inte på en uppgift.');
+    if (at.kind === 'heading') throw new Error('Det är en rubrik. Ställ markören på en uppgift.');
+    if (at.kind === 'block') throw new Error('Det är ett textstycke, inte en uppgift. Ställ markören på en uppgift.');
+    if (!at.id) throw new Error('Uppgiften är inte skickad till dodo än. Vänta in synken och försök igen.');
+    const t = ld.snap.todos.find(x => x.id === at.id);
+    if (!t) throw new Error('Uppgiften finns inte i dodo längre.');
+    let T: any;
+    try { T = await this.call('GET', `/api/l/${encodeURIComponent(to)}/state`); } catch (e: any) { throw e.status === 403 || e.status === 404 ? new Error('Du är inte med i den listan, så du kan inte skriva i den.') : e; }
+    const src = ld.snap.headings.find(x => x.id === t.h), h = (src && T.headings.find((x: any) => String(x.title).trim() === String(src.title).trim())?.id) ?? null;
+    const r = await this.call('POST', `/api/l/${id}/todos/${at.id}/copy`, h ? { to, h } : { to });
+    const name = String(T.list?.name ?? to), text = t.text.length > 60 ? t.text.slice(0, 59) + '…' : t.text;
+    this.d.host.notice(`dodo: kopierade »${text}« till »${name}«.`);
+    if (this.data.lists[to] && !this.data.lists[to].off) void this.flush(to); // its note is filled in now, not at the next sync
+    return { list: r.list, id: r.id, name };
   }
 
   // ---- comments ----
@@ -530,6 +617,75 @@ export class Dodo {
     await this.flush(id);
   }
 
+  // ---- sharing (#15): public links, people and lists I am in ----
+  // what a link allows, in words. SHOWS are the fields a visitor sees
+  static SHOWS: [string, string][] = [['due', 'datum'], ['prio', 'prioritet'], ['tags', 'taggar'], ['who', 'vem'], ['notes', 'anteckning'], ['done', 'klara'], ['comments', 'kommentarer']];
+  static says(o: any): string {
+    const show = Dodo.SHOWS.filter(([k]) => o?.show?.[k]).map(([, l]) => l), may = [o?.check && 'bocka av', o?.add && 'lägga till', o?.comment && 'kommentera', o?.notes && 'skriva i anteckningen'].filter(Boolean);
+    return `visar ${show.length ? show.join(', ') : 'bara texten'}${may.length ? '; får ' + may.join(', ') : '; kan inte ändra något'}`;
+  }
+  private says: Record<string, Record<string, string>> = {}; // list id -> link id -> what it allows (read off GET /shares, whose addresses are never kept)
+  private sig: Record<string, string> = {};
+  // the links change when the ids in the state change; what they allow is read again then
+  private async loadSays(id: string, S: Snap, force = false) {
+    const ids = (S.shares || []).map(s => s.id).sort().join();
+    if (!force && this.sig[id] === ids) return;
+    this.sig[id] = ids;
+    if (!ids) { delete this.says[id]; return; }
+    try { this.says[id] = Object.fromEntries((await this.call('GET', `/api/l/${id}/shares`)).map((s: any) => [s.id, Dodo.says(s.opts)])); } catch { delete this.sig[id]; } // tried again next time
+  }
+  // the todo lines with an active public link: where a marker goes
+  shareLines(id: string, file: string): { line: number; id: string; n: number; says: string }[] {
+    const p = this.plan(id, file), links = p?.ld.snap.shares || [];
+    if (!p || !links.length) return [];
+    const out: { line: number; id: string; n: number; says: string }[] = [];
+    p.plan.forEach((it, i) => {
+      if (it.level || it.block || !it.id) return;
+      const mine = links.filter(s => s.todo === it.id);
+      if (mine.length) out.push({ line: p.starts[i] + p.off, id: it.id, n: mine.length, says: mine.map(s => this.says[id]?.[s.id]).filter(Boolean).join(' · ') });
+    });
+    return out;
+  }
+  // everything I share and every list I am in. No address of a link is in it. `can*` says what the server will allow this user
+  async shared(): Promise<{ mine: SharedMine[]; member: SharedIn[] }> {
+    const d = await this.call('GET', '/api/shared');
+    return {
+      mine: d.mine.map((l: any) => ({ id: l.id, name: l.name, people: l.people as { id: string; name: string; role: string }[],
+        links: l.links.map((x: any) => ({ id: x.id, todo: x.todo as string | null, text: x.text as string | null, expires: x.expires as string | null, opts: x.opts, says: Dodo.says(x.opts), views: x.views, names: x.names })) })),
+      member: d.member.map((l: any) => ({ id: l.id, name: l.name, role: l.role as string, by: l.by as string[], note: this.noted(l.id),
+        // a list keeps an admin: the only admin cannot leave (the server says so too)
+        canLeave: l.role !== 'admin' || d.mine.find((m: any) => m.id === l.id)?.people.some((x: any) => x.role === 'admin') === true })),
+    };
+  }
+  // the list has a note here that is kept in step, and so would go aside if the list were left
+  noted(id: string) { const ld = this.data.lists[id]; return !!ld && !ld.off && !ld.lost && !!this.d.host.note(id); }
+  asideFolder() { return this.asideDir(); }
+  async removePerson(list: string, user: string) {
+    await this.call('POST', `/api/l/${list}/members/${encodeURIComponent(user)}`, { action: 'remove' });
+  }
+  async stopLink(list: string, link: string) {
+    await this.call('DELETE', `/api/l/${list}/shares/${encodeURIComponent(link)}`, {});
+    delete this.sig[list]; // the next snapshot reads the links again
+    if (this.data.lists[list]) await this.flush(list);
+  }
+  // `change` is laid over what the link allows now (the server wants all of it); what cannot go together (commenting without seeing comments) the server drops
+  async changeLink(list: string, link: string, change: { show?: Record<string, boolean>; check?: boolean; add?: boolean; comment?: boolean; notes?: boolean; notesMode?: 'append' | 'replace' }) {
+    const cur = (await this.call('GET', `/api/l/${list}/shares`)).find((s: any) => s.id === link)?.opts;
+    if (!cur) throw new Error('Länken finns inte längre.');
+    const o = { ...cur, ...change, show: { ...cur.show, ...change.show } };
+    await this.call('PUT', `/api/l/${list}/shares/${encodeURIComponent(link)}`, { show: o.show, check: !!o.check, add: !!o.add, comment: !!o.comment, notes: !!o.notes, notesMode: o.notesMode === 'replace' ? 'replace' : 'append' });
+    const S = this.data.lists[list]?.snap;
+    if (S) { await this.loadSays(list, S, true); this.onSnap(list); }
+  }
+  // leaving a list: what is unsent is sent first, then the note goes aside like for any list that is gone
+  async leave(list: string) {
+    const ld = this.data.lists[list], kept = this.noted(list);
+    if (kept) await this.flush(list);
+    await this.call('POST', `/api/l/${list}/leave`, {});
+    const note = ld && kept ? this.d.host.note(list) : null;
+    if (ld && note) await this.locked(list, async () => { if (!ld.lost) await this.lose(list, ld, note, `dodo: du har lämnat »${ld.name}«. Anteckningen ligger nu i ${this.asideDir()}, med en rad överst om det. Texten finns kvar.`); });
+  }
+
   // ---- errors and status ----
   private async fail(id: string, ld: ListData | null, note: Note | null, e: Fail) {
     if (e.status === 401) {
@@ -537,16 +693,21 @@ export class Dodo {
       this.errs.set(id, 'Sessionen har stängts av. Logga in igen.');
       this.d.host.notice('dodo: du är utloggad. Det du skriver sparas i anteckningen och skickas efter inloggningen.', ...this.d.openSettings ? [{ label: 'Logga in igen', run: this.d.openSettings }] : []);
     } else if (e.lost && ld && note) {
-      ld.lost = true; this.errs.delete(id);
-      const file = await note.read().catch(() => '');
-      if (file && !file.includes(LOST_TITLE)) { const { head } = split(file); await note.replace(file, head + lostNote(ld.name, new Date().toISOString().slice(0, 10)) + '\n\n' + file.slice(head.length)); }
-      const dir = this.data.folder.replace(/^\/+|\/+$/g, '');
-      await this.d.host.move(id, `${dir ? dir + '/' : ''}${ASIDE}`).catch(() => {});
-      this.d.host.notice(`dodo: »${ld.name}« finns inte längre i dodo. Anteckningen ligger nu i ${ASIDE}, med en rad överst om det.`);
-      this.onLists();
-      await this.d.save();
+      this.errs.delete(id);
+      await this.lose(id, ld, note, `dodo: »${ld.name}« finns inte längre i dodo. Anteckningen ligger nu i ${ASIDE}, med en rad överst om det.`);
     } else this.errs.set(id, e.message || String(e));
   }
+  // the list is gone for this user (deleted, taken out of, or left): the note gets a line at the top and goes aside, never deleted
+  private async lose(id: string, ld: ListData, note: Note, told: string) {
+    ld.lost = true;
+    const file = await note.read().catch(() => '');
+    if (file && !file.includes(LOST_TITLE)) { const { head } = split(file); await note.replace(file, head + lostNote(ld.name, new Date().toISOString().slice(0, 10)) + '\n\n' + file.slice(head.length)); }
+    await this.d.host.move(id, this.asideDir()).catch(() => {});
+    this.d.host.notice(told);
+    this.onLists();
+    await this.d.save();
+  }
+  private asideDir() { const dir = this.data.folder.replace(/^\/+|\/+$/g, ''); return `${dir ? dir + '/' : ''}${ASIDE}`; }
   private update() {
     this.lastError = [...this.errs.values()][0] ?? '';
     this.status = this.busy ? 'busy' : this.errs.size ? 'err' : 'ok';

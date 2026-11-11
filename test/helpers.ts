@@ -68,6 +68,15 @@ export class FakeVault implements Host {
     const t = this.files.get(from)!; this.files.delete(from); this.files.set(to, t);
   }
   base(id: string) { const p = this.path(id); return p ? p.split('/').pop()!.replace(/\.md$/, '') : null; }
+  folders = new Set<string>(); // folders made on their own (empty ones); the others follow from the files
+  dir(id: string) { const p = this.path(id); return p ? p.split('/').slice(0, -1).join('/') : null; }
+  dirs(root: string) {
+    const all = new Set(this.folders);
+    for (const f of this.files.keys()) for (let p = f.split('/').slice(0, -1); p.length; p.pop()) all.add(p.join('/'));
+    return [...all].filter(d => !root || d.startsWith(root + '/'));
+  }
+  async mkdir(p: string) { this.folders.add(p); }
+  async prune(p: string) { if (![...this.files.keys(), ...this.folders].some(f => f.startsWith(p + '/'))) this.folders.delete(p); }
   looking = new Set<string>();
   viewing(id: string) { return this.looking.has(id); }
   exists(p: string) { return this.files.has(p); }

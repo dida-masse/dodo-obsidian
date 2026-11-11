@@ -28,6 +28,18 @@ Sessionen sparas bara i pluginets egna data (`data.json`), aldrig i anteckningar
 - Period: `^2026-11-20..2026-11-22` eller `^fredag..söndag` sätter ett slutdatum (en period över flera dagar), som i dodo; kombinerbart med klockslag (`^fredag..söndag 14:30-10:00` är start första dagen och slut sista dagen). Tar du bort slutet i anteckningen tas det bort i dodo, och startdatumet står kvar. Kräver dodo från 2026-11-08.
 - Inställningen *Dölj klara uppgifter* tar bort dem ur anteckningen utan att ta bort dem i dodo.
 
+## Mappar
+
+dodos mappar för listor (de du har lagt dina listor i på webben) blir riktiga mappar i `dodo/`: en lista i *HT26* under *Kurser* ligger som `dodo/Kurser/HT26/DA101.md`. Det gäller åt båda hållen.
+
+- Flyttas en lista i dodo flyttas filen vid nästa synk. Flyttar du filen till en annan mapp i Obsidian flyttas listan i dodo. Ny mapp, omdöpt mapp och borttagen mapp följer också med åt båda håll.
+- En mapp som tas bort tar aldrig med sig något: innehållet hamnar en nivå upp, i dodo och i Obsidian. En tom mapp finns kvar i dodo tills någon tar bort den.
+- Pluginet hämtar alltid dodos senaste träd först och ändrar bara det du ändrat i Obsidian, så en ändring på webben skrivs inte över. Har du och webben flyttat samma lista åt olika håll vinner dodo och filen flyttas.
+- Tecken som inte går i filnamn (`/ \ : * ? " < > |`) blir mellanrum. Två mappar med samma namn på samma nivå heter `Namn` och `Namn (2)` i valvet. dodo tillåter högst 5 nivåer och 60 tecken i ett mappnamn: lägger du en anteckning djupare får du en notis och den hamnar på femte nivån.
+- Är hela valvet dodo-mappen (inställningen *Mapp* är tom) blir en mapp i Obsidian bara en mapp i dodo om en dodo-anteckning ligger i den. Tas fler än hälften av dina mappar bort på en gång, eller saknas en listas anteckning (valvet är kanske inte färdigsynkat), tas inget bort i dodo: mapparna läggs tillbaka och du får en notis med *Ta bort ändå*.
+- Ordningen på mappar och listor följer inte med: Obsidian sorterar efter namn, och ordningen skrivs aldrig tillbaka.
+- Första gången följer filerna dodo: ligger dina anteckningar platt i `dodo/` flyttas de till sina mappar. Kräver en dodo med mappar (dida-masse/dodo#119).
+
 ## Det som inte finns i anteckningen
 
 Kommentarer skrivs aldrig in i anteckningen, och inte heller vem som bockade av och när eller historiken. De finns kvar i dodo och påverkas inte av att anteckningen skrivs om.
@@ -35,6 +47,21 @@ Kommentarer skrivs aldrig in i anteckningen, och inte heller vem som bockade av 
 ## Kommentarer
 
 Kommandot *dodo: Visa kommentarer* (eller ikonen i vänsterkanten) öppnar en sidopanel med kommentarerna på uppgiften där markören står: författare, tid och text (markdown), svar indragna under tråden, lösta trådar ihopvikta. Längst ner skriver du en ny kommentar (Ctrl/Cmd+Enter skickar), och *Svara* finns på varje kommentar. Rader med kommentarer får en liten *💬 n* sist på raden (bara en markering i editorn, inte text i filen); den är färgad när någon annan har skrivit något du inte har sett, och ett klick öppnar panelen. När någon annan kommenterar får du en notis. En rad du precis har skrivit och som inte är skickad än har inga kommentarer.
+
+## Kopiera en uppgift till en annan lista
+
+Kommandot *dodo: Kopiera uppgiften till en annan lista…* kopierar uppgiften där markören står (med deluppgifter) till en annan av dina listor, som du väljer ur en lista. Kopian är en ny, fristående uppgift: den får egna id och tar inte med kommentarer, länkar eller källa, och personer som inte är med i den andra listan tas bort. Finns en rubrik med samma namn i målet hamnar kopian under den, annars utan rubrik. Uppgiften i den här listan är orörd, och du får en notis med målets namn. Ligger målet också som anteckning fylls den på direkt.
+
+Osända ändringar i anteckningen skickas först, så rätt uppgift kopieras. Kommandot säger ifrån (i stället för att kopiera fel) om markören står på en rubrik, ett textstycke eller en rad som inte har kunnat skickas. Kräver dodo från dida-masse/dodo#103.
+
+## Delningar
+
+- **Markering på raden.** En uppgift med en aktiv publik länk får en liten *🔗 n* sist på raden, efter 💬 (bara en markering i editorn, inte text i filen). Pekar du på den står det vad länken tillåter, och ett klick öppnar *Delningar*. Länkar till hela listan har ingen rad att sitta på och syns bara i *Delningar*.
+- **Kommandot *dodo: Delningar…*** visar det du delar i listor du driver (personer och publika länkar) och listorna du är med i, som webbens *Delningar*. Bara det du får göra visas: som admin finns *Ta bort* för personer, *Ändra* och *Stoppa länken* för länkar; som medlem finns bara *Lämna listan*. En listas enda admin kan inte lämna den (gör först någon annan till admin i dodo).
+- **Ändra en länk.** *Ändra* öppnar knappar för vad länken visar (datum, prioritet, taggar, vem, anteckning, klara, kommentarer) och om besökaren får bocka av, lägga till (bara länkar till hela listan), kommentera och skriva i anteckningen. Hur länge länken gäller går inte att ändra, inte heller i dodo.
+- **Stoppa länken, ta bort en person och lämna en lista** frågar alltid först, på en egen sida som säger exakt vad som stoppas eller lämnas, och *Avbryt* är det som är markerat. Lämnar du en lista skickas det du har skrivit först, sedan flyttas anteckningen till `dodo/Borttagna/` med en rad överst om att du har lämnat listan; texten finns kvar i filen men hålls inte längre i takt.
+- Länkarnas adresser och nycklar hämtas, visas och sparas aldrig av pluginet: inte i anteckningar, inte i pluginets data, inte i notiser eller felmeddelanden. Vill du ha adressen, kopiera den i dodo.
+- **Finns inte här:** att skapa en ny länk och att kopiera adressen (görs i dodo), och en egen notis när någon besöker en länk (kommentarsnotisen finns redan).
 
 ## Kurslistor
 
