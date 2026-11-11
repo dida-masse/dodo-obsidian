@@ -36,6 +36,7 @@ dodos mappar för listor (de du har lagt dina listor i på webben) blir riktiga 
 - En mapp som tas bort tar aldrig med sig något: innehållet hamnar en nivå upp, i dodo och i Obsidian. En tom mapp finns kvar i dodo tills någon tar bort den.
 - Pluginet hämtar alltid dodos senaste träd först och ändrar bara det du ändrat i Obsidian, så en ändring på webben skrivs inte över. Har du och webben flyttat samma lista åt olika håll vinner dodo och filen flyttas.
 - Tecken som inte går i filnamn (`/ \ : * ? " < > |`) blir mellanrum. Två mappar med samma namn på samma nivå heter `Namn` och `Namn (2)` i valvet. dodo tillåter högst 5 nivåer och 60 tecken i ett mappnamn: lägger du en anteckning djupare får du en notis och den hamnar på femte nivån.
+- Är hela valvet dodo-mappen (inställningen *Mapp* är tom) blir en mapp i Obsidian bara en mapp i dodo om en dodo-anteckning ligger i den. Tas fler än hälften av dina mappar bort på en gång, eller saknas en listas anteckning (valvet är kanske inte färdigsynkat), tas inget bort i dodo: mapparna läggs tillbaka och du får en notis med *Ta bort ändå*.
 - Ordningen på mappar och listor följer inte med: Obsidian sorterar efter namn, och ordningen skrivs aldrig tillbaka.
 - Första gången följer filerna dodo: ligger dina anteckningar platt i `dodo/` flyttas de till sina mappar. Kräver en dodo med mappar (dida-masse/dodo#119).
 

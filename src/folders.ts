@@ -2,7 +2,9 @@
 // Ren kod utan Obsidian. Sökvägarna är relativa till dodo-mappen, med / emellan och utan / först och sist; '' är dodo-mappen själv.
 export interface Folder { id: string; name: string; parent: string | null }
 export interface Tree { folders: Folder[]; lists: Record<string, string> } // lists: list id -> folder id
-export interface Disk { dirs: string[]; lists: Record<string, string> } // alla mappar i valvet, och mappen för varje anteckning
+// dirs: alla mappar i valvet; lists: mappen för varje anteckning; absent: listor som är på men saknar anteckning (valvet är då kanske inte färdigsynkat);
+// strict: hela valvet är dodo-mappen, så en mapp utan dodo-anteckning är inte dodos och skickas aldrig
+export interface Disk { dirs: string[]; lists: Record<string, string>; absent?: string[]; strict?: boolean }
 
 export const MAX_DEPTH = 5; // dodos gräns
 // tecken som inte går i filnamn blir mellanrum; högst 60 tecken, som dodo tillåter
@@ -28,9 +30,10 @@ export function pathsOf(t: Tree): Map<string, string> {
 
 // Det som ändrats på disken sedan förra synken (`base`) läggs på dodos senaste träd (`srv`), så att en ändring på webben inte skrivs över.
 // Ändrade dodo och disken samma sak åt olika håll vinner dodo (och disken följer efter, se Dodo.folders). Utan `base` (första gången) räknas inget som lokalt ändrat.
-export function mergeFolders(base: Tree | null, srv: Tree, disk: Disk, newId: () => string): { tree: Tree; notes: string[] } {
+export function mergeFolders(base: Tree | null, srv: Tree, disk: Disk, newId: () => string): { tree: Tree; notes: string[]; wanted: number } {
   const T: Tree = { folders: srv.folders.map(f => ({ ...f })), lists: { ...srv.lists } }, notes: string[] = [];
-  if (!base) return { tree: T, notes };
+  let wanted = 0; // hur många mappar disken vill ta bort ur dodo (även de som skyddas nedan)
+  if (!base) return { tree: T, notes, wanted };
   const bp = pathsOf(base), cut = (p: string) => p.split('/').slice(0, MAX_DEPTH).join('/');
   // djupare än fem nivåer skapas aldrig i dodo: det som ligger djupare räknas som ligger på femte nivån
   if (Object.values(disk.lists).some(d => d.split('/').length > MAX_DEPTH)) notes.push(`dodo: mappar får ligga högst ${MAX_DEPTH} nivåer djupt, så anteckningar djupare än så läggs på nivån ovanför.`);
@@ -64,6 +67,9 @@ export function mergeFolders(base: Tree | null, srv: Tree, disk: Disk, newId: ()
   // borttagen mapp: innehållet flyttas en nivå upp, aldrig bort
   for (const f of bp.keys()) {
     if (local.has(f) || !same(f)) continue;
+    wanted++;
+    // en lista i mappen (eller under den) som är på men saknar anteckning: valvet är ofullständigt, mappen är inte borttagen
+    if ((disk.absent || []).some(l => { for (let x = base.lists[l] as string | undefined; x !== undefined; x = bf.get(x)?.parent ?? undefined) if (x === f) return true; return false; })) continue;
     const up = tf.get(f)!.parent;
     for (const x of T.folders) if (x.parent === f) x.parent = up;
     for (const [l, d] of Object.entries(T.lists)) if (d === f) { if (up) T.lists[l] = up; else delete T.lists[l]; }
@@ -75,7 +81,7 @@ export function mergeFolders(base: Tree | null, srv: Tree, disk: Disk, newId: ()
     Object.assign(tf.get(f)!, { name: p.split('/').pop()!.slice(0, 60), parent: parentOf(p) });
   }
   // ny mapp, de grunda först så att föräldern finns
-  for (const [k, p] of [...dirs].filter(([k]) => !idAt.has(k)).sort((a, b) => a[1].split('/').length - b[1].split('/').length)) {
+  for (const [k, p] of [...dirs].filter(([k]) => !idAt.has(k) && (!disk.strict || Object.keys(disk.lists).some(l => lc(listAt(l)) === k || lc(listAt(l)).startsWith(k + '/')))).sort((a, b) => a[1].split('/').length - b[1].split('/').length)) {
     const x = { id: newId(), name: p.split('/').pop()!.slice(0, 60), parent: parentOf(p) };
     T.folders.push(x); tf.set(x.id, x); idAt.set(k, x.id);
   }
@@ -88,5 +94,5 @@ export function mergeFolders(base: Tree | null, srv: Tree, disk: Disk, newId: ()
     if (to === undefined || (to && !tf.has(to))) continue;
     if (to) T.lists[l] = to; else delete T.lists[l];
   }
-  return { tree: T, notes };
+  return { tree: T, notes, wanted };
 }

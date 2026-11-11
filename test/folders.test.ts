@@ -130,7 +130,9 @@ test('a folder emptied and removed in Obsidian, with a sibling that has a list: 
   await r.dodo.folders();
   await r.vault.move(r.list, 'dodo'); // both folders gone from the vault, the note at the top
   await r.vault.prune('dodo/A/B'); await r.vault.prune('dodo/A');
-  await r.dodo.folders();
+  await r.dodo.folders(); // both of two folders at once: asked first
+  assert.equal((await tree()).folders.length, 2);
+  await r.dodo.releaseFolders(true);
   const t = await tree();
   assert.deepEqual([t.folders, t.lists], [[], {}]);
 });
@@ -208,4 +210,66 @@ test('a note that is off or lost is left alone, and the first sync only follows 
   await r.dodo.folders();
   assert.deepEqual((await tree()).folders.map((f: any) => f.name), ['Kurser', 'Egen']); // the folder is a folder, the off list is not moved
   assert.equal((await tree()).lists[r.list], 'k1');
+});
+
+// a stored tree: Kurser > HT26 (with the list), Jobb, Privat; synced once
+const stored = async () => {
+  const r = await mk();
+  const t = [F('k1', 'Kurser'), F('k2', 'HT26', 'k1'), F('j', 'Jobb'), F('p', 'Privat')];
+  await put(t, { [r.list]: 'k2' });
+  await r.dodo.folders();
+  return { r, t };
+};
+
+test('a vault whose files are not there yet leaves dodo\'s tree alone, is filled from dodo, and asks; "Ta bort ändå" then sends the removal', async () => {
+  const { r, t } = await stored();
+  r.vault.files.clear(); r.vault.folders.clear(); // another computer: data.json is there, the vault's files have not synced down
+  await r.dodo.folders();
+  assert.deepEqual((await tree()).folders, t);
+  assert.deepEqual(folderWrites(r), []);
+  assert.deepEqual([...r.vault.dirs('dodo')].sort(), ['dodo/Jobb', 'dodo/Kurser', 'dodo/Kurser/HT26', 'dodo/Privat']);
+  assert.equal(r.vault.notices.length, 1);
+  assert.match(r.vault.notices[0].text, /4 av 4 mappar skulle tas bort/);
+  assert.deepEqual(r.vault.notices[0].actions.map((a: any) => a.label), ['Ta bort ändå', 'Hämta från dodo']);
+  await r.dodo.folders(); // asked once, and a later sync still changes nothing
+  assert.equal(r.vault.notices.length, 1);
+  assert.deepEqual((await tree()).folders, t);
+  await r.dodo.releaseFolders(true); // the folder with the list, whose note is missing, stays; the empty ones go
+  assert.deepEqual((await tree()).folders.map((f: any) => f.name), ['Kurser', 'HT26']);
+});
+
+test('"Hämta från dodo" drops the held removal; one empty folder deleted on purpose still goes; a folder whose list has no note is never removed', async () => {
+  const { r, t } = await stored();
+  r.vault.files.clear(); r.vault.folders.clear();
+  await r.dodo.folders();
+  await r.dodo.releaseFolders(false);
+  await r.dodo.releaseFolders(true);
+  assert.deepEqual((await tree()).folders, t);
+  const q = await stored();
+  q.r.vault.folders.delete('dodo/Jobb'); // one real deletion in Obsidian
+  await q.r.dodo.folders();
+  assert.deepEqual((await tree()).folders.map((f: any) => f.name), ['Kurser', 'HT26', 'Privat']);
+  assert.equal(q.r.vault.notices.length, 0);
+  const w = await stored();
+  w.r.vault.files.clear(); w.r.vault.folders.delete('dodo/Kurser'); w.r.vault.folders.delete('dodo/Kurser/HT26'); // the note is missing, the folder with it looks removed
+  await w.r.dodo.folders();
+  assert.deepEqual((await tree()).folders, w.t);
+  assert.deepEqual(w.r.vault.notices, []); // only one folder asked for: no question, and nothing is removed
+});
+
+test('with the whole vault as the dodo folder, folders without a dodo note are never sent; one with a note is', async () => {
+  await put([]);
+  const r = await rig(srv, `Hela ${++n}`, ses);
+  r.data.folder = '';
+  await r.dodo.enable(r.list); await r.dodo.folders();
+  r.vault.folders.add('Dagbok'); r.vault.folders.add('Dagbok/2026'); r.vault.folders.add('Projekt');
+  await r.dodo.folders();
+  assert.deepEqual(folderWrites(r), []);
+  assert.deepEqual((await tree()).folders, []);
+  await r.vault.move(r.list, 'Ny/Mapp');
+  await r.dodo.folders();
+  const t = await tree();
+  assert.deepEqual(t.folders.map((f: any) => f.name), ['Ny', 'Mapp']);
+  assert.equal(t.lists[r.list], t.folders[1].id);
+  assert.deepEqual([...r.vault.files.keys()], [`Ny/Mapp/Hela ${n}.md`]);
 });

@@ -1,7 +1,7 @@
 // The sync core: no `obsidian` import. Network, notes and dialogs come in through small interfaces, so the tests run it with Node's fetch and a fake vault.
 // The text rules (md.js) and the way a changed document becomes API calls are the web page's (public/index.html, openDoc) and tui.js's editAll.
 import { loadMd, type Md } from './md.js';
-import { mergeFolders, pathsOf, type Tree } from './folders.js';
+import { mergeFolders, pathsOf, type Disk, type Tree } from './folders.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type HttpReq = { method: string; url: string; headers: Record<string, string>; body?: string };
@@ -310,7 +310,13 @@ export class Dodo {
   }
   // ---- folders (#19) ----
   // dodo's tree and the vault's folders are made one: what changed in the vault since the last sync is laid on dodo's newest tree, then the vault follows the result
-  async folders() {
+  // a removal of more than half of dodo's folders is more likely a vault that is not there yet (not synced down on this computer) than a cleanup: it waits for the user, like massDelete for notes
+  heldFolders: Disk | null = null;
+  async releaseFolders(send: boolean) {
+    const disk = this.heldFolders; this.heldFolders = null;
+    if (disk && send) await this.folders(disk); // the vault as it was then, and this time the removal is sent
+  }
+  async folders(held?: Disk) {
     if (!this.data.session || this.authLost) return;
     return this.locked('folders', async () => {
       const h = this.d.host, root = this.data.folder.replace(/^\/+|\/+$/g, ''), up = (p: string) => root ? p.slice(root.length + 1) : p, down = (p: string) => [root, p].filter(Boolean).join('/');
@@ -319,8 +325,15 @@ export class Dodo {
         const srv = (await this.call('GET', '/api/folders')) as Tree, lists: Record<string, string> = {};
         for (const [id, l] of Object.entries(this.data.lists)) { const d = l.off || l.lost ? null : h.dir(id); if (d != null && inside(d) && !aside(up(d))) lists[id] = up(d); }
         const dirs = h.dirs(root).filter(inside).map(up).filter(d => d && !aside(d));
-        const { tree, notes } = mergeFolders(this.data.tree ?? null, srv, { dirs, lists }, uid);
+        const absent = Object.entries(this.data.lists).filter(([id, l]) => !l.off && !l.lost && h.dir(id) == null).map(([id]) => id);
+        const disk = held ?? { dirs, lists, absent, strict: !root };
+        let { tree, notes, wanted } = mergeFolders(this.data.tree ?? null, srv, disk, uid);
         notes.forEach(n => h.notice(n));
+        if (!held && wanted >= 2 && wanted * 2 > (this.data.tree?.folders.length ?? 0)) { // nothing is removed in dodo: the vault follows dodo, and the user is asked
+          tree = srv;
+          if (!this.heldFolders) h.notice(`dodo: ${wanted} av ${this.data.tree!.folders.length} mappar skulle tas bort i dodo, så ingen mapp är borttagen. Mapparna läggs tillbaka i valvet. Är det meningen att de ska bort?`, { label: 'Ta bort ändå', run: () => void this.releaseFolders(true) }, { label: 'Hämta från dodo', run: () => void this.releaseFolders(false) });
+          this.heldFolders = disk;
+        }
         const T = JSON.stringify(tree) === JSON.stringify(srv) ? srv : (await this.call('PUT', '/api/folders', tree)) as Tree;
         const was = pathsOf(this.data.tree ?? T), now = pathsOf(T), have = new Set(dirs.map(d => d.toLowerCase())), want = (id: string) => (T.lists[id] ? now.get(T.lists[id]) ?? '' : '');
         for (const p of now.values()) if (!have.has(p.toLowerCase())) await h.mkdir(down(p));
