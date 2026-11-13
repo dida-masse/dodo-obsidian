@@ -66,6 +66,7 @@ export const COPY_TITLE = '> [!warning] Det här är en andra kopia av en dodo-l
 export const copyNote = (kept: string) => `${COPY_TITLE}\n> Listan hålls i takt i ${kept}. Den här anteckningen hålls inte i takt längre, men texten finns kvar här.`;
 export const SEND_MS = 1000; // quiet after typing before it is sent
 // a note whose changes would delete this many of the list's todos is held back: more likely a misread note (a ~~~ in a mail signature once swallowed 62 todos) than a cleanup
+const MAX_NEW = 50; // more new todos than this from one push is more likely a loop than typing
 export const massDelete = (gone: number, total: number) => gone >= 10 || (gone >= 3 && gone * 2 > total);
 // the first free `dir/stem.md`, `dir/stem 2.md` …; n > 1 means the first was taken
 export function freeName(dir: string, stem: string, exists: (p: string) => boolean) {
@@ -140,6 +141,7 @@ export class Dodo {
   private locks = new Map<string, Promise<unknown>>();
   private edited = new Map<string, number>();
   held = new Map<string, string>(); // list id -> why its note is not sent: a mass deletion waits for the user
+  private allowNew = new Set<string>(); // the user said create them anyway
   private allow = new Set<string>(); // the user said send it anyway: the next push may delete
 
   constructor(public data: Data, private d: { http: Http; host: Host; save: () => unknown; openSettings?: () => void }) {
@@ -448,6 +450,12 @@ export class Dodo {
     });
     await this.flush(id);
   }
+  async releaseNew(id: string, send: boolean) {
+    if (send) this.allowNew.add(id);
+    const h = this.held.get(id);
+    if (h !== undefined) { if (send) this.held.delete(id); else await this.release(id, false); }
+    if (send) await this.flush(id);
+  }
   private async run(id: string, now: boolean) {
     const ld = this.data.lists[id], note = ld && this.d.host.note(id);
     if (!ld || ld.off || ld.lost || this.authLost || !note) return;
@@ -485,14 +493,23 @@ export class Dodo {
   // note -> server: what changed against the last server version, like the web page's Markdown mode does when it saves
   private async push(id: string, ld: ListData, note: Note) {
     const md = this.md, file = await note.read(), { head, text } = split(file);
-    const items = this.items(ld.snap, ld.hide);
+    // a note without a single done line, while dodo has several done todos, is another computer's hidden-done rendering: not a deletion of them
+    const dones = ld.snap.todos.filter(t => t.done).length, hide = ld.hide || (dones >= 2 && !/^\s*[-*+] \[[xX]\]/m.test(text));
+    const items = this.items(ld.snap, hide);
     const S = (await this.state(id))!; // the newest state first, so only what I changed is written over others' work
     this.users.length = 0; this.users.push(...S.users);
-    if (squash(text) === squash(this.render(S, ld.hide))) { // the note already says what dodo says: the edit came with the vault from another computer, which sent it
+    if ([ld.hide, !ld.hide].some(h => squash(text) === squash(this.render(S, h)))) { // (the other setting too: another computer, which hides or shows done todos, wrote it) // the note already says what dodo says: the edit came with the vault from another computer, which sent it
       Object.assign(ld, { text, rev: S.rev, snap: this.snap(S) });
       return this.d.save();
     }
-    const plan = md.docPlan(items, text), at = new Map(items.map(x => [x.id, x.at])), inDoc = new Set(items.map(x => x.id));
+    // a done line for a todo this computer hides is that todo (another computer shows it), not a new one: it is taken out of the text before the plan,
+    // and the todo is left alone (it is not in `items`, so nothing is deleted or changed). A new `- [x]` line matches none of them and is created.
+    let rest = text;
+    if (hide) for (const t of ld.snap.todos) if (t.done && !t.md && !items.some(x => x.id === t.id)) {
+      const ser = '\n' + md.serialize(t) + '\n', w = '\n' + rest + '\n';
+      if (w.includes(ser)) rest = w.replace(ser, '\n').slice(1, -1);
+    }
+    const plan = md.docPlan(items, rest), at = new Map(items.map(x => [x.id, x.at])), inDoc = new Set(items.map(x => x.id));
 
     const kept = new Set(plan.filter(p => p.id).map(p => p.id)), todos = items.filter(i => !i.heading && !i.block);
     const gone = todos.filter(i => !kept.has(i.id)).length, ok = this.allow.delete(id);
@@ -502,6 +519,13 @@ export class Dodo {
       if (!this.held.has(id)) this.d.host.notice('dodo: ' + why, { label: 'Ta bort ändå', run: () => void this.release(id, true) }, { label: 'Hämta från dodo', run: () => void this.release(id, false) });
       this.held.set(id, why);
       throw new Fail(why); // the status bar shows it until it is answered; once told, the next polls say nothing
+    }
+    const news = plan.filter(p => !p.id && !p.level && !p.block && p.lines && md.parseBlock(p.lines).text).length;
+    if (news > MAX_NEW && !this.allowNew.delete(id)) {
+      const why = `»${ld.name}«: ${news} nya uppgifter skulle skapas i dodo på en gång, så inget av anteckningen är skickat. Kör »Skapa ändå« om det är meningen, eller »Hämta listan från dodo igen«.`;
+      if (!this.held.has(id)) this.d.host.notice('dodo: ' + why, { label: 'Skapa ändå', run: () => void this.releaseNew(id, true) }, { label: 'Hämta från dodo', run: () => void this.releaseNew(id, false) });
+      this.held.set(id, why);
+      throw new Fail(why);
     }
     this.held.delete(id);
 
