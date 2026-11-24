@@ -64,6 +64,18 @@ Osända ändringar i anteckningen skickas först, så rätt uppgift kopieras. Ko
 - Länkarnas adresser och nycklar hämtas, visas och sparas aldrig av pluginet: inte i anteckningar, inte i pluginets data, inte i notiser eller felmeddelanden. Vill du ha adressen, kopiera den i dodo.
 - **Finns inte här:** att skapa en ny länk och att kopiera adressen (görs i dodo), och en egen notis när någon besöker en länk (kommentarsnotisen finns redan).
 
+## Länkar
+
+Du kan länka till en hel lista, en rubrik eller en uppgift, också i en annan lista, som med `[[` i Obsidian. Länken syns som vanlig länktext och går att klicka på, i alla anteckningar i valvet. Den följer med om målet byter namn eller flyttas.
+
+- **Skriva en länk, det enkla sättet.** Kör kommandot *dodo: Länka till lista, rubrik eller uppgift…* (finns också när du högerklickar i anteckningen). Rutan visar dina listor; skriv för att söka bland uppgifter och rubriker, eller `Listans namn/ord` för att bara söka i en lista. Valet skrivs in där markören står. Kräver att du är inloggad och har nätet på.
+- **Skriva en länk med `[[`.** I en dodo-anteckning öppnar `[[` en förslagslista från dodo i stället för Obsidians egen: uppgifter och rubriker i den här listan först, sedan dina andra listor, sedan det som finns i dem. Varje förslag visar om det är en lista, rubrik eller uppgift, och vilken lista den ligger i. `Lista/` begränsar till en lista. Är du utan nät kommer inga förslag. I andra anteckningar fungerar `[[` som vanligt; använd kommandot ovan.
+- **Länka till det du står på.** *dodo: Kopiera länk till uppgiften/rubriken* (också i högerklicksmenyn) kopierar en länk till raden där markören står, och *Kopiera dodo-länk till listan* i menyn för en dodo-anteckning kopierar en länk till hela listan. Klistra in länken i en annan anteckning. Står markören på en rad som inte är skickad till dodo än får du veta det; vänta en stund och försök igen.
+- **Klicka.** En lista som är en anteckning i valvet öppnas som anteckning; en rubrik eller uppgift öppnas och markeras (uppgiften och rubriken markeras en kort stund). Finns inte listan som anteckning här öppnas den i dodo på webben. Är målet borttaget är länken överstruken och ett klick säger *Borttagen*. Är målet något du inte har tillgång till eller som inte finns visas bara texten, utan länk och utan att säga något mer.
+- **I filen** står länken precis som i dodo, `[[Visad text|dodo:t/…]]`, och skickas oförändrad dit; pluginet gör aldrig om den. Det är därför Obsidians egen länkvisning inte kan följa den: bara pluginet gör den klickbar. Utan pluginet (eller utloggad, eller utan nät) syns länken som `[[Visad text|dodo:…]]` eller bara som texten, och går inte att klicka på. Den visade texten är den som skrevs; byter målet namn ändras den inte.
+- **Integritet.** Vilka mål länkarna pekar på hämtas från dodo, i omgångar, och sparas bara i minnet medan Obsidian är igång (en kort stund per länk, och töms när du loggar ut). Inget sparas i anteckningar eller i pluginets data, och inget skrivs i loggen.
+- **Finns inte än:** länkar bakåt (vem länkar hit) och att göra om vanliga Obsidian-länkar till dodo-länkar.
+
 ## Kurslistor
 
 En kurslista (dodo #38) har en uppgift per kurs, hämtad från Kursredan. Den är en vanlig dodo-lista i Obsidian, med några skillnader:

@@ -254,5 +254,11 @@ function stepTarget(rows, id, dir) {
   return { h: rows[i - 2] ? rows[i - 2].h ?? null : null }; // above its own heading: last in the section before it
 }
 
-return { parseBlock, parseHeading, serialize, docPlan, docText, blockText, splitDoc, headingText, headingItem, ordKey };
+// ---- [[Text|dodo:t/id]] (#225): kind t todo, h heading, l list. The shown text may hold none of [ ] | or a line break, so those become a space ----
+function dodoLink(kind, id, text, fallback = 'länk') {
+  const s = String(text ?? '').replace(/[\[\]|\s]+/g, ' ').trim().slice(0, 80).trim();
+  return `[[${s || fallback}|dodo:${kind}/${id}]]`;
+}
+
+return { parseBlock, parseHeading, serialize, docPlan, docText, blockText, splitDoc, headingText, headingItem, ordKey, dodoLink };
 }

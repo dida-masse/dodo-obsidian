@@ -4,6 +4,8 @@ import { CommentsView, newsLine, VIEW } from './panel.js';
 import { marksExtension, refreshMarks } from './marks.js';
 import { refreshTables, sourceExtension } from './source.js';
 import { SharedModal } from './shares.js';
+import { linksExtension, readingLinks, type LinkHost } from './linkview.js';
+import { LinkModal, LinkSuggest } from './suggest.js';
 import { nodeStream, type Stream } from './events.js';
 import { Dodo, emptyData, freeName, listIdOf, minimalChange, SEND_MS, tieOf, type Data, type Host, type Http, type Note } from './sync.js';
 
@@ -85,6 +87,7 @@ export default class DodoPlugin extends Plugin implements Host {
       if (!check) void this.copyTodo(id, editor.getCursor().line);
       return true;
     } });
+    this.setupLinks();
     this.addCommand({ id: 'shared', name: 'Delningar…', callback: () => this.openShared() });
     this.addCommand({ id: 'add-list', name: 'Lägg till lista', callback: () => this.addList() });
     // a held mass deletion in the active note (sync.ts, massDelete): the commands only show while there is one
@@ -131,6 +134,70 @@ export default class DodoPlugin extends Plugin implements Host {
     this.stream = open({ url: this.data.url, session: this.data.session, version: this.manifest.version,
       onState: up => { this.up = up; if (up) void this.tick(); }, // after a drop or a wake-up: catch up at once
       onEvent: (name, d) => this.dodo.event(name, d) });
+  }
+
+  // ---- [[Text|dodo:t/id]] links ----
+  private setupLinks() {
+    const host: LinkHost = { known: ref => this.dodo.linkKnown(ref), info: refs => this.dodo.linkInfo(refs), go: ref => void this.openLink(ref) };
+    this.registerEditorExtension(linksExtension(host, s => s.field(editorLivePreviewField, false) ?? false));
+    this.registerMarkdownPostProcessor(el => readingLinks(el, host));
+    this.registerEditorSuggest(new LinkSuggest(this.app, { dodo: this.dodo, listOf: f => this.idOf(f) }));
+    const loggedIn = () => { if (this.data.session) return true; new Notice('Logga in på dodo i inställningarna först.'); return false; };
+    const dodoLine = (editor: Editor, file: TFile | null, what: 'todo' | 'link') => {
+      const id = file && this.idOf(file);
+      if (!id || !this.data.lists[id] || !loggedIn()) return;
+      const r = this.dodo.linkAt(id, editor.getValue(), editor.getCursor().line);
+      if ('why' in r) return void new Notice('dodo: ' + r.why);
+      void this.copy(r.link, what === 'todo' ? 'Länken är kopierad. Klistra in den i en annan anteckning.' : '');
+    };
+    const insert = (editor: Editor, file: TFile | null) => {
+      if (!loggedIn()) return;
+      new LinkModal(this.app, this.dodo, (file && this.idOf(file)) || '', link => editor.replaceSelection(link)).open();
+    };
+    this.addCommand({ id: 'link', name: 'Länka till lista, rubrik eller uppgift…', editorCallback: (editor, ctx) => insert(editor, ctx.file) });
+    this.addCommand({ id: 'copy-link', name: 'Kopiera länk till uppgiften/rubriken', editorCheckCallback: (check, editor, ctx) => {
+      const id = ctx.file && this.idOf(ctx.file);
+      if (!id || !this.data.lists[id]) return false;
+      if (!check) dodoLine(editor, ctx.file, 'todo');
+      return true;
+    } });
+    this.registerEvent(this.app.workspace.on('editor-menu', (menu, editor, view) => {
+      menu.addItem(i => i.setTitle('dodo: Länka till lista, rubrik eller uppgift…').setIcon('link').onClick(() => insert(editor, view.file)));
+      const id = view.file && this.idOf(view.file);
+      if (id && this.data.lists[id]) menu.addItem(i => i.setTitle('dodo: Kopiera länk till uppgiften/rubriken').setIcon('copy').onClick(() => dodoLine(editor, view.file, 'todo')));
+    }));
+    this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
+      const id = file instanceof TFile ? this.idOf(file) : null;
+      if (id && this.data.lists[id]) menu.addItem(i => i.setTitle('Kopiera dodo-länk till listan').setIcon('link').onClick(() => {
+        const link = loggedIn() && this.dodo.listLink(id);
+        if (link) void this.copy(link, 'Länken till listan är kopierad. Klistra in den i en annan anteckning.');
+      }));
+    }));
+  }
+  private async copy(text: string, told: string) {
+    try { await navigator.clipboard.writeText(text); if (told) new Notice('dodo: ' + told); } catch { new Notice('dodo: Kunde inte kopiera. Länken är: ' + text, 15000); }
+  }
+  // a click on a link: the list's note, the heading or the todo in it; a list without a note here opens in dodo on the web
+  async openLink(ref: string) {
+    const [kind, id] = ref.split('/'), [r] = await this.dodo.linkInfo([ref], true); // asked again: it may have been moved or deleted since
+    if (r === undefined) return void new Notice('dodo: Får ingen kontakt med dodo just nu.');
+    if (!r) return void new Notice('dodo: Länken går inte att öppna.');
+    if (r.gone) return void new Notice('dodo: Borttagen');
+    const file = this.data.lists[r.list] && !this.data.lists[r.list].off && !this.data.lists[r.list].lost ? this.fileFor(r.list) : null;
+    if (!file) return void window.open(`${this.data.url}/l/${r.list}`); // no note for it in this vault: the web page opens the list
+    let line = -1;
+    if (kind !== 'l') {
+      const note = this.note(r.list);
+      line = note ? this.dodo.itemLine(r.list, await note.read(), id) : -1;
+      if (line < 0) new Notice('dodo: ' + (kind === 't' ? 'Uppgiften' : 'Rubriken') + ' finns inte i anteckningen (kanske dold eller inte hämtad än).');
+    }
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(file, line >= 0 ? { eState: { line } } : undefined);
+    const v = leaf.view;
+    if (line < 0 || !(v instanceof MarkdownView) || v.getMode() !== 'source') return;
+    const ed = v.editor, to = { line, ch: ed.getLine(line).length };
+    ed.setSelection({ line, ch: 0 }, to); ed.scrollIntoView({ from: { line, ch: 0 }, to }, true); // marked for a moment: a heading too
+    window.setTimeout(() => { const s = ed.getSelection(); if (s && ed.getCursor('from').line === line && ed.getCursor('to').line === line) ed.setCursor({ line, ch: 0 }); }, 2500);
   }
 
   // a note or folder was moved, made or removed in the vault: dodo hears of it when the moving has stopped (the plugin's own moves come back here and change nothing)

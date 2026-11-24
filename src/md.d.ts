@@ -10,6 +10,7 @@ export interface Md {
   headingText(h: any): string;
   headingItem(h: any): string;
   ordKey(t: any): number;
+  dodoLink(kind: string, id: string, text: string, fallback?: string): string;
 }
 // users: the array md.js reads people from; change its content in place
 export function loadMd(users: any[], uid: () => string, lang: string): Md;
