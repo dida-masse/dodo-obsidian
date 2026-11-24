@@ -141,7 +141,11 @@ export default class DodoPlugin extends Plugin implements Host {
     const host: LinkHost = { known: ref => this.dodo.linkKnown(ref), info: refs => this.dodo.linkInfo(refs), go: ref => void this.openLink(ref) };
     this.registerEditorExtension(linksExtension(host, s => s.field(editorLivePreviewField, false) ?? false));
     this.registerMarkdownPostProcessor(el => readingLinks(el, host));
-    this.registerEditorSuggest(new LinkSuggest(this.app, { dodo: this.dodo, listOf: f => this.idOf(f) }));
+    const sug = new LinkSuggest(this.app, { dodo: this.dodo, listOf: f => this.idOf(f) });
+    this.registerEditorSuggest(sug);
+    // Obsidian asks its suggesters in order and its own [[ list comes first, so ours is moved to the front (not public API: if it changes, the command is the way in)
+    const all = (this.app.workspace as any).editorSuggest?.suggests;
+    if (Array.isArray(all) && all.includes(sug)) { all.splice(all.indexOf(sug), 1); all.unshift(sug); }
     const loggedIn = () => { if (this.data.session) return true; new Notice('Logga in på dodo i inställningarna först.'); return false; };
     const dodoLine = (editor: Editor, file: TFile | null, what: 'todo' | 'link') => {
       const id = file && this.idOf(file);
@@ -184,7 +188,7 @@ export default class DodoPlugin extends Plugin implements Host {
     if (!r) return void new Notice('dodo: Länken går inte att öppna.');
     if (r.gone) return void new Notice('dodo: Borttagen');
     const file = this.data.lists[r.list] && !this.data.lists[r.list].off && !this.data.lists[r.list].lost ? this.fileFor(r.list) : null;
-    if (!file) return void window.open(`${this.data.url}/l/${r.list}`); // no note for it in this vault: the web page opens the list
+    if (!file) return void window.open(`${this.data.url}/l/${r.list}${kind === 't' ? '?t=' + encodeURIComponent(id) : ''}`); // no note for it in this vault: the web page opens the list (and the todo)
     let line = -1;
     if (kind !== 'l') {
       const note = this.note(r.list);
