@@ -34,3 +34,8 @@
 .dodo-src-mark { flex: none; width: 1em; }
 .dodo-src-hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-accent); font-style: normal; }
 .dodo-src-change { font-size: var(--font-ui-smaller); color: var(--text-muted); }
+.dodo-link { color: inherit; }
+.dodo-on, .dodo-gone { color: var(--link-color); text-decoration: underline; text-decoration-color: var(--link-color); cursor: pointer; }
+.dodo-gone { color: var(--text-muted); text-decoration: line-through; }
+.dodo-kind { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.dodo-in { color: var(--text-muted); }

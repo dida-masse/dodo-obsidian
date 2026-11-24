@@ -1,6 +1,7 @@
 // The sync core: no `obsidian` import. Network, notes and dialogs come in through small interfaces, so the tests run it with Node's fetch and a fake vault.
 // The text rules (md.js) and the way a changed document becomes API calls are the web page's (public/index.html, openDoc) and tui.js's editAll.
 import { loadMd, type Md } from './md.js';
+import { splitQuery } from './links.js';
 import { mergeFolders, pathsOf, type Disk, type Tree } from './folders.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -64,6 +65,7 @@ export const ASIDE = 'Borttagna';
 // a second note for a list that holds text of its own: its tie (`dodo:`) is cut and it goes aside with a line at the top
 export const COPY_TITLE = '> [!warning] Det här är en andra kopia av en dodo-lista';
 export const copyNote = (kept: string) => `${COPY_TITLE}\n> Listan hålls i takt i ${kept}. Den här anteckningen hålls inte i takt längre, men texten finns kvar här.`;
+const LINK_TTL = 5 * 60e3; // how long an answer about a link is used again without asking
 export const SEND_MS = 1000; // quiet after typing before it is sent
 // a note whose changes would delete this many of the list's todos is held back: more likely a misread note (a ~~~ in a mail signature once swallowed 62 todos) than a cleanup
 const MAX_NEW = 50; // more new todos than this from one push is more likely a loop than typing
@@ -177,9 +179,56 @@ export class Dodo {
   async logout() {
     if (this.data.session) await this.call('POST', '/api/logout', {}).catch(() => {});
     Object.assign(this.data, { session: '', name: '' });
+    this.links.clear(); // the answers about other lists are not kept past a logout
     await this.d.save();
   }
   async lists(): Promise<{ id: string; name: string; changed?: boolean; role?: string }[]> { return (await this.call('GET', '/api/lists')).lists; }
+
+  // ---- [[Text|dodo:t/id]] links (dodo #225) ----
+  // ref -> what POST /api/links said (null: not there or not mine, the server does not say which). Memory only, never saved, emptied at logout.
+  private links = new Map<string, { at: number; r: { list: string; gone?: boolean } | null }>();
+  // null for the refs that could not be asked (offline, logged out): they stay as they were. A click asks again (fresh).
+  async linkInfo(refs: string[], fresh = false): Promise<(({ list: string; gone?: boolean } | null) | undefined)[]> {
+    if (!this.data.session) return refs.map(() => undefined);
+    const ask = [...new Set(refs)].filter(r => { const c = this.links.get(r); return fresh || !c || Date.now() - c.at > LINK_TTL; });
+    for (let i = 0; i < ask.length && (fresh || Date.now() - this.linkDown > 30e3); i += 100) { // after a failure not again for 30 s, so a note full of links does not ask on every cursor move
+      const part = ask.slice(i, i + 100);
+      try { const d = await this.call('POST', '/api/links', { refs: part }); for (const r of part) this.links.set(r, { at: Date.now(), r: d?.[r] || null }); } catch { this.linkDown = Date.now(); }
+    }
+    return refs.map(r => this.linkKnown(r));
+  }
+  private linkDown = 0;
+  linkKnown(ref: string) { return this.data.session ? this.links.get(ref)?.r : undefined; }
+  // the link to the todo or heading at a line of the note, to copy; or why there is none
+  linkAt(id: string, file: string, line: number): { link: string } | { why: string } {
+    const ld = this.data.lists[id], at = ld && this.todoAt(id, file, line);
+    if (!ld || !this.data.session) return { why: 'Logga in på dodo först.' };
+    if (!at || at.kind === 'block') return { why: 'Ställ markören på en uppgift eller en rubrik.' };
+    if (!at.id) return { why: 'Raden är inte skickad till dodo än' + (this.status === 'err' ? ' (det går inte att nå dodo just nu)' : ', vänta en stund') + '. Försök igen när den är skickad.' };
+    const t = at.kind === 'todo' ? ld.snap.todos.find(x => x.id === at.id)?.text : ld.snap.headings.find(x => x.id === at.id)?.title;
+    return t == null ? { why: 'Raden är inte hämtad från dodo än. Försök igen strax.' } : { link: this.dodoLink(at.kind === 'todo' ? 't' : 'h', at.id, t) };
+  }
+  listLink(id: string) { const n = this.data.lists[id]?.name; return n == null ? null : this.dodoLink('l', id, n); }
+  // the suggestions for [[ in the order the web page has them: this list's todos and headings, the other lists, what is in the other lists; `Lista/` keeps to that list
+  async linkSearch(listId: string, q: string): Promise<{ kind: 't' | 'h' | 'l'; id: string; text: string; list: string; listName: string }[]> {
+    const sp = splitQuery(q), lq = sp.list.toLowerCase(), w = sp.word.trim();
+    const find = async (p: Record<string, string>) => ((await this.call('GET', '/api/links/search?' + new URLSearchParams({ q: w, ...p })))?.items ?? []) as any[];
+    const lists = await this.lists(), has = (s: string) => s.toLowerCase().includes(w.toLowerCase());
+    if (lq) {
+      const only = lists.find(l => l.name.toLowerCase() === lq) || lists.find(l => l.name.toLowerCase().includes(lq));
+      return only ? (await find({ list: only.id })).slice(0, 12) : [];
+    }
+    if (!listId) return [...lists.filter(l => has(l.name)).slice(0, 4).map(l => ({ kind: 'l' as const, id: l.id, text: l.name, list: l.id, listName: '' })), ...await find({})].slice(0, 12);
+    const here = lists.find(l => l.id === listId)?.name ?? '';
+    const [mine, others] = await Promise.all([find({ list: listId }), find({ not: listId })]);
+    return [...mine.map(x => ({ ...x, listName: here })), ...lists.filter(l => l.id !== listId && has(l.name)).slice(0, 4).map(l => ({ kind: 'l' as const, id: l.id, text: l.name, list: l.id, listName: '' })), ...others].slice(0, 12);
+  }
+  // where a todo or heading is in the note (0-based line in the whole file), or -1
+  itemLine(id: string, file: string, item: string) {
+    const p = this.plan(id, file), i = p ? p.plan.findIndex(it => it.id === item) : -1;
+    return p && i >= 0 ? p.starts[i] + p.off : -1;
+  }
+  dodoLink(kind: string, id: string, text: string) { return this.md.dodoLink(kind, id, text); }
 
   // ---- the state of a list, and its text ----
   // null = nothing changed since `rev`
